@@ -4,42 +4,42 @@ A production-ready document question-answering system with improved answer quali
 
 ## 📁 Project Structure
 
-\`\`\`
+```
 qa-system/
-├── app/                          # Main application package
-│   ├── __init__.py              # Package initialization
-│   ├── main.py                  # FastAPI backend
-│   ├── config.py                # Configuration settings
-│   ├── document_processor.py    # Document processing logic
-│   ├── rag_system.py           # RAG implementation
-│   └── streamlit_app.py        # Frontend interface
-├── start.py                     # Simple startup script
-├── requirements.txt             # Python dependencies
-├── Dockerfile                   # Docker configuration
-├── .env.example                # Environment variables template
-├── DEPLOYMENT.md               # Deployment instructions
-└── README.md                   # This file
-\`\`\`
+├── app/ # Main application package
+│ ├── init.py # Package initialization
+│ ├── main.py # FastAPI backend
+│ ├── config.py # Configuration settings
+│ ├── document_processor.py # Document processing logic
+│ ├── rag_system.py # RAG pipeline with memory + retrieval
+│ └── streamlit_app.py # Streamlit frontend interface
+├── start.py # Startup script
+├── requirements.txt # Python dependencies
+├── Dockerfile # Docker configuration
+├── .env.example # Environment variables template
+├── DEPLOYMENT.md # Deployment instructions
+└── README.md # This file
+```
 
 ## 🚀 Quick Start
 
 1. **Clone and setup:**
-   \`\`\`bash
-   git clone <your-repo-url>
+   ```
+   git clone https://github.com/Sripad1003/SmartDoc_QA.git
    cd qa-system
    pip install -r requirements.txt
-   \`\`\`
+    ```
 
 2. **Configure API key:**
-   \`\`\`bash
+   ```
    cp .env.example .env
    # Edit .env and add your Gemini API key
-   \`\`\`
+   ```
 
 3. **Start the system:**
-   \`\`\`bash
+   ```
    python start.py
-   \`\`\`
+   ```
 
 4. **Open your browser:**
    - Frontend: http://127.0.0.1:8501
@@ -67,18 +67,18 @@ qa-system/
 
 ## 📊 System Architecture
 
-\`\`\`
+```
 Frontend (Streamlit) ←→ Backend (FastAPI) ←→ Google Gemini API
                               ↓
                     Document Processor
                               ↓
                       RAG System (Enhanced)
-\`\`\`
+```
 
 ## 🔧 Configuration
 
 ### Environment Variables
-\`\`\`bash
+```
 # Required
 GEMINI_API_KEY=your-api-key-here
 
@@ -86,7 +86,7 @@ GEMINI_API_KEY=your-api-key-here
 MAX_CHUNK_SIZE=1500          # Larger chunks for better context
 MAX_RETRIEVAL_CHUNKS=8       # More sources for comprehensive answers
 MAX_ANSWER_LENGTH=2000       # Longer, detailed responses
-\`\`\`
+```
 
 ### Enhanced Settings
 - **Chunk Size**: 1500 characters (50% larger than v1.0)
