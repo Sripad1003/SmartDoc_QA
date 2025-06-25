@@ -48,6 +48,7 @@ class EvaluationRequest(BaseModel):
     dataset_type: str = "squad"  # "squad", "coqa", "custom"
     sample_size: Optional[int] = None
     include_performance: bool = True
+    doc_id: Optional[str] = None
 
 # Initialize system components
 doc_processor = DocumentProcessor()
@@ -110,139 +111,6 @@ async def health_check():
         }
     }
 
-@app.post("/add-sample-content")
-async def add_sample_content():
-    """Add enhanced sample content with evaluation datasets"""
-    try:
-        sample_content = """# AI/ML Exercise: Intelligent Document Q&A System
-
-## Project Overview
-Build a production-ready document question-answering system that learns from user interactions and improves over time. This system should handle multiple document formats, maintain conversation history, and adapt based on user feedback.
-
-## Technical Requirements
-
-### Phase 1: Document Processing Pipeline (30-40 minutes)
-**Objective**: Create a robust document ingestion system
-
-**Key Components**:
-1. **Multi-format Document Support**
-   - PDF processing with multiple extraction methods
-   - DOCX document handling
-   - Plain text and HTML support
-   - Markdown file processing
-   - Error handling for corrupted files
-
-2. **Intelligent Text Chunking**
-   - Semantic chunking based on document structure
-   - Overlap management for context preservation
-   - Metadata extraction and storage
-   - Chunk size optimization for embeddings
-
-### Phase 2: RAG System Implementation (40-50 minutes)
-**Objective**: Implement retrieval-augmented generation
-
-**Core Features**:
-1. **Vector Database Setup**
-   - Document embedding generation using Google Gemini
-   - Efficient similarity search implementation
-   - Metadata indexing for source tracking
-   - Caching mechanisms for performance
-
-2. **Query Processing**
-   - Query understanding and expansion
-   - Multi-modal retrieval strategies
-   - Context ranking and selection
-   - Relevance scoring algorithms
-
-### Phase 3: System Integration (30-40 minutes)
-**Objective**: Create a cohesive user experience
-
-### Phase 4: Evaluation and Testing (30-40 minutes)
-**Objective**: Comprehensive system evaluation
-
-**Evaluation Datasets**:
-1. **Stanford Question Answering Dataset (SQUAD 2.0)**
-   - 150,000+ questions on 500+ Wikipedia articles
-   - Includes unanswerable questions for robustness testing
-   - F1 and Exact Match scoring
-
-2. **COQA - Conversational Question Answering**
-   - 127,000+ questions with answers from 8,000+ conversations
-   - Multi-turn conversational structure
-   - Coherence and context retention evaluation
-
-3. **Natural Questions (NQ) Dataset**
-   - Real Google search queries with Wikipedia answers
-   - Long-form and short-form answer annotations
-
-**Evaluation Metrics**:
-- **F1 Score**: Token overlap between predicted and expected answers
-- **Exact Match**: Binary score for perfect answer matches
-- **Response Time**: System performance benchmarking
-- **Coherence Score**: Conversational consistency measurement
-- **Memory Usage**: Resource utilization profiling
-
-**Performance Targets**:
-- Document processing: < 30 seconds per document
-- Query response time: < 5 seconds
-- Answer accuracy: > 80% user satisfaction (F1 > 0.8)
-- System uptime: > 99% availability
-
-## Recommended Technology Stack
-
-### Backend Technologies
-- **Framework**: FastAPI for high-performance API development
-- **LLM Integration**: Google Gemini Pro for text generation
-- **Embeddings**: Google Gemini Embedding Model
-- **Document Processing**: PyPDF2, python-docx, BeautifulSoup4
-- **Evaluation**: Custom SQUAD/COQA evaluation pipeline
-
-### Evaluation and Testing
-- **Automated Testing Suite**: SQUAD evaluation metrics (F1, Exact Match)
-- **Conversational Testing**: COQA for conversational coherence
-- **Performance Benchmarking**: Response time and memory profiling
-- **Production Readiness**: API documentation, error handling, rate limiting
-
-## Success Metrics
-
-### Accuracy Benchmarks
-- **SQUAD 2.0 F1 Score**: Target > 0.75
-- **SQUAD 2.0 Exact Match**: Target > 0.65
-- **COQA F1 Score**: Target > 0.70
-- **Conversational Coherence**: Target > 0.80
-
-### Performance Benchmarks
-- **Average Response Time**: < 3 seconds
-- **P95 Response Time**: < 8 seconds
-- **Throughput**: > 10 requests/second
-- **Memory Usage**: < 500MB per request
-- **Error Rate**: < 1%
-
-This comprehensive evaluation framework ensures the system meets production-quality standards for accuracy, performance, and reliability."""
-
-        # Add the content
-        doc_id = doc_processor.add_manual_content(
-            "AI_ML_Exercise_with_Evaluation.md",
-            sample_content
-        )
-        
-        # Index the document chunks
-        chunks = doc_processor.get_document_chunks(doc_id)
-        await rag_system.index_documents(chunks)
-        
-        return {
-            "message": "Enhanced sample content with evaluation framework added",
-            "doc_id": doc_id,
-            "filename": "AI_ML_Exercise_with_Evaluation.md",
-            "chunks": len(chunks),
-            "status": "processed",
-            "evaluation_ready": True
-        }
-    
-    except Exception as e:
-        logger.error(f"Error adding sample content: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/evaluate")
 async def run_evaluation(request: EvaluationRequest):
     """Run comprehensive system evaluation"""
@@ -251,11 +119,9 @@ async def run_evaluation(request: EvaluationRequest):
             raise HTTPException(status_code=400, detail="Invalid dataset type")
 
         # Run the comprehensive evaluation suite with document context if provided
-        doc_id = None
-        # For example, get doc_id from request or session if applicable
-        # Here we assume doc_id is passed as a query parameter for demonstration
-        if hasattr(request, "doc_id") and request.doc_id:
-            doc_id = request.doc_id
+        doc_id = request.doc_id
+        if not doc_id:
+            raise HTTPException(status_code=400, detail="Document ID is required for evaluation. Please upload documents first.")
 
         results = await evaluation_system.run_comprehensive_evaluation(doc_id=doc_id)
         evaluation_system.evaluation_results = results

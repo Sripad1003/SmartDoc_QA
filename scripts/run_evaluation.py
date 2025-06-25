@@ -25,132 +25,35 @@ async def main():
         
         print("✅ Components initialized successfully")
         
-        # Add sample content for evaluation
-        print("📄 Adding sample content...")
-        sample_content = """# AI/ML Exercise: Intelligent Document Q&A System
-
-## Project Overview
-Build a production-ready document question-answering system that learns from user interactions and improves over time. This system should handle multiple document formats, maintain conversation history, and adapt based on user feedback.
-
-## Technical Requirements
-
-### Phase 1: Document Processing Pipeline (30-40 minutes)
-**Objective**: Create a robust document ingestion system
-
-**Key Components**:
-1. **Multi-format Document Support**
-   - PDF processing with multiple extraction methods
-   - DOCX document handling
-   - Plain text and HTML support
-   - Markdown file processing
-   - Error handling for corrupted files
-
-2. **Intelligent Text Chunking**
-   - Semantic chunking based on document structure
-   - Overlap management for context preservation
-   - Metadata extraction and storage
-   - Chunk size optimization for embeddings
-
-### Phase 2: RAG System Implementation (40-50 minutes)
-**Objective**: Implement retrieval-augmented generation
-
-**Core Features**:
-1. **Vector Database Setup**
-   - Document embedding generation using Google Gemini
-   - Efficient similarity search implementation
-   - Metadata indexing for source tracking
-   - Caching mechanisms for performance
-
-2. **Query Processing**
-   - Query understanding and expansion
-   - Multi-modal retrieval strategies
-   - Context ranking and selection
-   - Relevance scoring algorithms
-
-### Phase 3: System Integration (30-40 minutes)
-**Objective**: Create a cohesive user experience
-
-### Phase 4: Evaluation and Testing (30-40 minutes)
-**Objective**: Comprehensive system evaluation
-
-**Evaluation Datasets**:
-1. **Stanford Question Answering Dataset (SQUAD 2.0)**
-   - 150,000+ questions on 500+ Wikipedia articles
-   - Includes unanswerable questions for robustness testing
-   - F1 and Exact Match scoring
-
-2. **COQA - Conversational Question Answering**
-   - 127,000+ questions with answers from 8,000+ conversations
-   - Multi-turn conversational structure
-   - Coherence and context retention evaluation
-
-3. **Natural Questions (NQ) Dataset**
-   - Real Google search queries with Wikipedia answers
-   - Long-form and short-form answer annotations
-
-**Evaluation Metrics**:
-- **F1 Score**: Token overlap between predicted and expected answers
-- **Exact Match**: Binary score for perfect answer matches
-- **Response Time**: System performance benchmarking
-- **Coherence Score**: Conversational consistency measurement
-- **Memory Usage**: Resource utilization profiling
-
-**Performance Targets**:
-- Document processing: < 30 seconds per document
-- Query response time: < 5 seconds
-- Answer accuracy: > 80% user satisfaction (F1 > 0.8)
-- System uptime: > 99% availability
-
-## Recommended Technology Stack
-
-### Backend Technologies
-- **Framework**: FastAPI for high-performance API development
-- **LLM Integration**: Google Gemini Pro for text generation
-- **Embeddings**: Google Gemini Embedding Model
-- **Document Processing**: PyPDF2, python-docx, BeautifulSoup4
-- **Evaluation**: Custom SQUAD/COQA evaluation pipeline
-
-### Evaluation and Testing
-- **Automated Testing Suite**: SQUAD evaluation metrics (F1, Exact Match)
-- **Conversational Testing**: COQA for conversational coherence
-- **Performance Benchmarking**: Response time and memory profiling
-- **Production Readiness**: API documentation, error handling, rate limiting
-
-## Success Metrics
-
-### Accuracy Benchmarks
-- **SQUAD 2.0 F1 Score**: Target > 0.75
-- **SQUAD 2.0 Exact Match**: Target > 0.65
-- **COQA F1 Score**: Target > 0.70
-- **Conversational Coherence**: Target > 0.80
-
-### Performance Benchmarks
-- **Average Response Time**: < 3 seconds
-- **P95 Response Time**: < 8 seconds
-- **Throughput**: > 10 requests/second
-- **Memory Usage**: < 500MB per request
-- **Error Rate**: < 1%
-
-This comprehensive evaluation framework ensures the system meets production-quality standards for accuracy, performance, and reliability."""
-
-        # Add content to document processor
-        doc_id = doc_processor.add_manual_content(
-            "AI_ML_Exercise_with_Evaluation.md",
-            sample_content
-        )
+        # Check if documents are already uploaded
+        if not doc_processor.processed_documents:
+            print("❌ No documents found!")
+            print("📄 Please upload documents first using the web interface or API")
+            print("   1. Start the system: python start.py")
+            print("   2. Upload documents via http://127.0.0.1:8501")
+            print("   3. Then run this evaluation script")
+            return None
         
-        # Get chunks and index them
-        chunks = doc_processor.get_document_chunks(doc_id)
-        print(f"📊 Created {len(chunks)} chunks from document")
+        print(f"📄 Found {len(doc_processor.processed_documents)} processed documents")
         
-        # Index documents
-        print("🔗 Indexing documents with embeddings...")
-        await rag_system.index_documents(chunks)
+        # Get all chunks from existing documents
+        all_chunks = doc_processor.get_all_chunks()
+        if not all_chunks:
+            print("❌ No chunks found in processed documents!")
+            return None
+            
+        print(f"📊 Found {len(all_chunks)} chunks total")
+        
+        # Index documents if not already indexed
+        if not rag_system.chunk_embeddings:
+            print("🔗 Indexing documents with embeddings...")
+            await rag_system.index_documents(all_chunks)
+        
         print(f"✅ Indexed {len(rag_system.chunk_embeddings)} chunks")
         
         # Run comprehensive evaluation
         print("🧪 Running comprehensive SQUAD evaluation...")
-        results = await evaluation_system.run_comprehensive_evaluation(doc_id)
+        results = await evaluation_system.run_comprehensive_evaluation()
         
         # Extract and display results
         print("\n" + "="*60)
