@@ -580,7 +580,9 @@ def upload_and_qa():
     st.divider()
     
     # Document upload
-    st.subheader("📁 Upload Your Documents")
+    st.subheader("📁 Upload Your Custom Documents")
+    st.write("Upload your own documents to create custom questions and run evaluations!")
+    
     uploaded_files = st.file_uploader(
         "Choose files to upload and process",
         accept_multiple_files=True,
@@ -656,22 +658,87 @@ def upload_and_qa():
     
     st.divider()
     
-    # Enhanced Q&A section
+    # Enhanced Q&A section with dynamic questions
     st.subheader("❓ Ask Questions")
     
-    # Sample questions for evaluation
-    st.write("**Try these evaluation-focused questions:**")
-    sample_questions = [
-        "What is F1 score and how is it calculated?",
-        "What are the performance targets for Q&A systems?",
-        "Explain the difference between SQUAD and COQA evaluation",
-        "What is exact match score?",
-        "What are the best practices for document processing?",
-        "How should retrieval be optimized?",
-        "What evaluation datasets are recommended?"
-    ]
+    # Get list of documents for question generation
+    try:
+        doc_response = requests.get(f"{API_BASE_URL}/list-documents", timeout=10)
+        if doc_response.status_code == 200:
+            doc_list = doc_response.json()
+            documents = doc_list.get('documents', [])
+            
+            if documents:
+                st.write("**📚 Your Documents:**")
+                
+                # Document selector for question generation
+                doc_options = {f"{doc['filename']} ({doc['chunk_count']} chunks)": doc['doc_id'] 
+                              for doc in documents if doc.get('evaluation_ready', False)}
+                
+                if doc_options:
+                    selected_doc_name = st.selectbox(
+                        "Select a document to generate questions from:",
+                        [""] + list(doc_options.keys())
+                    )
+                    
+                    if selected_doc_name and st.button("🎯 Generate Questions from Document"):
+                        selected_doc_id = doc_options[selected_doc_name]
+                        
+                        with st.spinner("Generating questions from your document..."):
+                            try:
+                                question_response = requests.get(
+                                    f"{API_BASE_URL}/generate-questions/{selected_doc_id}?max_questions=7",
+                                    timeout=60
+                                )
+                                
+                                if question_response.status_code == 200:
+                                    question_result = question_response.json()
+                                    generated_questions = question_result.get('questions', [])
+                                    
+                                    st.success(f"✅ Generated {len(generated_questions)} questions from {question_result['filename']}")
+                                    
+                                    # Store generated questions in session state
+                                    st.session_state.generated_questions = generated_questions
+                                    st.session_state.source_document = question_result['filename']
+                                    
+                                    st.write("**🎯 Generated Questions:**")
+                                    for i, q in enumerate(generated_questions, 1):
+                                        st.write(f"{i}. {q}")
+                                
+                                else:
+                                    st.error(f"❌ Error generating questions: {question_response.text}")
+                            
+                            except Exception as e:
+                                st.error(f"❌ Error: {str(e)}")
+                else:
+                    st.warning("⚠️ No evaluation-ready documents found. Upload documents with sufficient content first.")
+            else:
+                st.info("📄 No documents uploaded yet. Upload documents above to generate custom questions.")
     
-    selected_question = st.selectbox("Choose a sample question:", [""] + sample_questions)
+    except Exception as e:
+        st.error(f"❌ Error fetching documents: {str(e)}")
+    
+    # Sample questions section
+    sample_questions = []
+    
+    # Use generated questions if available
+    if hasattr(st.session_state, 'generated_questions') and st.session_state.generated_questions:
+        st.write(f"**🎯 Questions from {st.session_state.source_document}:**")
+        sample_questions = st.session_state.generated_questions
+    else:
+        # Default questions
+        st.write("**📋 Default Evaluation Questions:**")
+        sample_questions = [
+            "What is F1 score and how is it calculated?",
+            "What are the performance targets for Q&A systems?",
+            "Explain the difference between SQUAD and COQA evaluation",
+            "What is exact match score?",
+            "What are the best practices for document processing?",
+            "How should retrieval be optimized?",
+            "What evaluation datasets are recommended?"
+        ]
+    
+    selected_question = st.selectbox("Choose a question:", [""] + sample_questions)
     
     # Initialize session state
     if 'session_id' not in st.session_state:

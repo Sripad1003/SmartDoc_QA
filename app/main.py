@@ -221,6 +221,67 @@ Building a production-ready Q&A system requires careful attention to evaluation 
         logger.error(f"Error creating test document: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/generate-questions/{doc_id}")
+async def generate_questions_from_document(doc_id: str, max_questions: int = 5):
+    """Generate sample questions from a specific document"""
+    try:
+        # Verify the document exists
+        if doc_id not in doc_processor.processed_documents:
+            raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+        
+        # Get document info
+        doc_info = doc_processor.get_document_info(doc_id)
+        chunks = doc_processor.get_document_chunks(doc_id)
+        
+        if len(chunks) < 2:
+            raise HTTPException(status_code=400, detail="Document has insufficient content for question generation")
+        
+        # Generate questions using the evaluation system
+        questions_data = await evaluation_system.generate_sample_data_from_document(doc_id, max_questions)
+        
+        # Extract just the questions for the response
+        questions = [item["question"] for item in questions_data]
+        
+        return {
+            "doc_id": doc_id,
+            "filename": doc_info.get("filename", "Unknown"),
+            "total_chunks": len(chunks),
+            "questions_generated": len(questions),
+            "questions": questions,
+            "sample_data": questions_data  # Full data for evaluation use
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating questions from document {doc_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/list-documents")
+async def list_documents():
+    """List all processed documents"""
+    try:
+        documents = []
+        for doc_id, doc_info in doc_processor.processed_documents.items():
+            chunks = doc_processor.get_document_chunks(doc_id)
+            documents.append({
+                "doc_id": doc_id,
+                "filename": doc_info.get("filename", "Unknown"),
+                "processed_at": doc_info.get("processed_at", "Unknown"),
+                "chunk_count": len(chunks),
+                "text_length": doc_info.get("text_length", 0),
+                "evaluation_ready": len(chunks) >= 3 and doc_info.get("text_length", 0) > 500
+            })
+        
+        return {
+            "total_documents": len(documents),
+            "documents": documents
+        }
+    
+    except Exception as e:
+        logger.error(f"Error listing documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/evaluate")
 async def run_evaluation(request: EvaluationRequest):
     """Run comprehensive system evaluation"""
@@ -345,8 +406,8 @@ async def test_document_processing(file: UploadFile = File(...)):
         text_analysis = {
             "total_characters": len(text),
             "cleaned_characters": len(cleaned_text),
-            "word_count": len(cleaned_text.split()) if cleaned_text else 0,
-            "paragraph_count": len([p for p in cleaned_text.split('\n\n') if p.strip()]) if cleaned_text else 0,
+            "word_count": len(cleaned_text),
+            "paragraph_count": len([p for p in cleaned_text.split('\n\n') if p.strip()]),
             "readability_score": _calculate_readability_score(cleaned_text)
         }
         

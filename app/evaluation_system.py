@@ -35,31 +35,55 @@ class EvaluationSystem:
             if not chunks:
                 logger.warning(f"No chunks found for document {doc_id}")
                 return sample_data
-            
+        
             # Limit chunks to max_questions for question generation
             selected_chunks = chunks[:max_questions]
-            
-            for chunk in selected_chunks:
+        
+            for i, chunk in enumerate(selected_chunks):
                 context_text = chunk.get("text", "")
-                # Generate question from context using Gemini via rag_system
-                prompt = f"Generate a question based on the following context:\n{context_text}\nQuestion:"
-                question = await self.rag_system._generate_with_gemini(prompt)
-                question = question.strip().rstrip("?") + "?"
+                if len(context_text) < 50:  # Skip very short chunks
+                    continue
                 
-                # Get answer from RAG system for the generated question
-                answer_data = await self.rag_system.generate_answer(question)
-                answer = answer_data.get("answer", "")
+                try:
+                    # Generate question from context using a more specific prompt
+                    prompt = f"""Based on the following text, generate a clear, specific question that can be answered directly from the content. The question should be factual and answerable.
+
+Text: {context_text[:800]}
+
+Generate only one question (no additional text):"""
                 
-                sample_data.append({
-                    "question": question,
-                    "answers": [answer],
-                    "context": context_text
-                })
-            
+                    question = await self.rag_system._generate_with_gemini(prompt)
+                    question = question.strip()
+                
+                    # Clean up the question
+                    if not question.endswith('?'):
+                        question += '?'
+                
+                    # Remove any prefixes like "Question:" or "Q:"
+                    question = question.replace("Question:", "").replace("Q:", "").strip()
+                
+                    # Get answer from RAG system for the generated question
+                    answer_data = await self.rag_system.generate_answer(question)
+                    answer = answer_data.get("answer", "")
+                
+                    if answer and len(answer) > 10:  # Only include if we got a meaningful answer
+                        sample_data.append({
+                            "question": question,
+                            "answers": [answer],
+                            "context": context_text
+                        })
+                
+                    logger.info(f"Generated question {i+1}: {question[:60]}...")
+                
+                except Exception as e:
+                    logger.error(f"Error generating question from chunk {i}: {str(e)}")
+                    continue
+        
             logger.info(f"Generated {len(sample_data)} sample questions from document {doc_id}")
+        
         except Exception as e:
             logger.error(f"Error generating sample data from document {doc_id}: {str(e)}")
-        
+    
         return sample_data
     
     async def evaluate_squad_format(self, squad_data: List[Dict]) -> Dict[str, Any]:
@@ -345,7 +369,7 @@ class EvaluationSystem:
     async def run_comprehensive_evaluation(self, doc_id: str = None) -> Dict[str, Any]:
         """Run comprehensive evaluation suite"""
         logger.info("Starting comprehensive evaluation suite")
-        
+    
         results = {
             "evaluation_timestamp": datetime.now().isoformat(),
             "system_info": {
@@ -353,38 +377,55 @@ class EvaluationSystem:
                 "cache_size": len(self.rag_system.query_cache)
             }
         }
-        
+    
         try:
             # Load sample data dynamically from document if doc_id provided
             if doc_id:
                 logger.info(f"Generating sample data from document: {doc_id}")
-                squad_sample = await self.generate_sample_data_from_document(doc_id)
+                squad_sample = await self.generate_sample_data_from_document(doc_id, max_questions=8)
                 if not squad_sample:
                     logger.warning(f"No sample data generated from document {doc_id}, falling back to default sample")
                     squad_sample = await self.load_squad_sample()
             else:
                 logger.info("No doc_id provided, using default SQUAD sample")
                 squad_sample = await self.load_squad_sample()
-        
+    
             if not squad_sample:
                 raise Exception("No evaluation data available")
-        
+    
             logger.info(f"Using {len(squad_sample)} questions for evaluation")
-        
+    
             # Run SQUAD evaluation
             logger.info("Running SQUAD evaluation...")
             results["squad_results"] = await self.evaluate_squad_format(squad_sample)
-        
+    
             # Run performance benchmark
             logger.info("Running performance benchmark...")
             test_questions = [item["question"] for item in squad_sample]
-            results["performance_results"] = await self.benchmark_performance(test_questions)
-        
+            results["performance_results"] = await self.benchmark_performance(test_questions, iterations=1)
+    
             logger.info("Comprehensive evaluation completed successfully")
-        
+    
         except Exception as e:
             logger.error(f"Error in comprehensive evaluation: {str(e)}")
             results["error"] = str(e)
-            # Don't raise the exception, return results with error info
-    
+            results["squad_results"] = {
+                "total_questions": 0,
+                "exact_matches": 0,
+                "f1_scores": [],
+                "response_times": [],
+                "predictions": [],
+                "errors": [{"error": str(e)}],
+                "exact_match_score": 0,
+                "average_f1": 0,
+                "average_response_time": 0
+            }
+            results["performance_results"] = {
+                "response_times": [],
+                "error_rate": 1.0,
+                "average_response_time": 0,
+                "p95_response_time": 0,
+                "throughput": 0
+            }
+
         return results
