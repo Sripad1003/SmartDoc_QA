@@ -12,12 +12,12 @@ qa-system/
 │ ├── config.py # Configuration settings
 │ ├── document_processor.py # Document processing logic
 │ ├── rag_system.py # RAG pipeline with memory + retrieval
+│ ├── evaluation_system.py # SQUAD evaluation system
 │ └── streamlit_app.py # Streamlit frontend interface
+├── scripts/ # Evaluation and utility scripts
 ├── start.py # Startup script
 ├── requirements.txt # Python dependencies
-├── Dockerfile # Docker configuration
 ├── .env.example # Environment variables template
-├── DEPLOYMENT.md # Deployment instructions
 └── README.md # This file
 \`\`\`
 
@@ -65,6 +65,12 @@ qa-system/
 - **Quality metrics**: Word count, chunk analysis, embedding tests
 - **Recommendations**: Specific suggestions for improving document processing
 
+### 📊 SQUAD Evaluation System
+- **Automated SQUAD 2.0 evaluation**: F1 and Exact Match scoring
+- **Performance benchmarking**: Response time and accuracy metrics
+- **Comprehensive reporting**: Detailed evaluation reports
+- **Production readiness assessment**: Grade system for deployment readiness
+
 ## 📊 System Architecture
 
 \`\`\`
@@ -73,6 +79,8 @@ Frontend (Streamlit) ←→ Backend (FastAPI) ←→ Google Gemini API
                     Document Processor
                               ↓
                       RAG System (Enhanced)
+                              ↓
+                    Evaluation System (SQUAD)
 \`\`\`
 
 ## 🔧 Configuration
@@ -113,21 +121,38 @@ MAX_ANSWER_LENGTH=2000       # Longer, detailed responses
 - **Encoding problems**: Special characters not displaying correctly
 - **Empty content**: Files that appear full but extract nothing
 
-## 🚀 Deployment
-
-### Quick Deploy
-- **Railway**: One-click deploy with GitHub integration
-- **Render**: Automatic deployment from repository
-- **Docker**: `docker build -t qa-system . && docker run -p 8000:8000 qa-system`
-
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions.
-
 ## 📈 Performance Improvements (v2.0)
 
 - **3x longer answers** with comprehensive detail
 - **60% better context retrieval** with enhanced chunking
 - **50% improved document processing** with multiple extraction methods
 - **Advanced testing tools** for quality assessment
+- **SQUAD evaluation system** for accuracy measurement
+
+## 📊 SQUAD Evaluation
+
+The system includes comprehensive SQUAD 2.0 evaluation capabilities:
+
+### Metrics Tracked
+- **F1 Score**: Token overlap between predicted and expected answers
+- **Exact Match**: Binary score for perfect answer matches
+- **Response Time**: System performance benchmarking
+- **Error Rate**: System reliability measurement
+
+### Performance Targets
+- **F1 Score**: > 0.75 (Production target)
+- **Exact Match**: > 0.65 (Production target)
+- **Response Time**: < 5 seconds per query
+- **Error Rate**: < 1%
+
+### Running Evaluations
+\`\`\`bash
+# Run SQUAD evaluation
+python scripts/run_evaluation.py
+
+# Quick evaluation
+python scripts/quick_evaluation.py
+\`\`\`
 
 ## 🔍 Troubleshooting
 
