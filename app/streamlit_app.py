@@ -122,7 +122,7 @@ def upload_and_qa():
                                 st.error(f"❌ {doc['filename']}: {doc.get('error', 'Unknown error')}")
                         
                         time.sleep(1)
-                        st.experimental_rerun()
+                        st.rerun()  # Fixed: Use st.rerun() instead of st.experimental_rerun()
                     else:
                         st.error(f"❌ Error: {response.text}")
                 

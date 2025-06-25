@@ -17,13 +17,15 @@ class SimpleEvaluator:
         self.document_processor = document_processor
     
     async def generate_questions_from_document(self, doc_id: str, max_questions: int = None) -> List[Dict]:
-        """Generate questions from uploaded document - simplified and reliable"""
+        """Generate questions from uploaded document - ultra-robust version"""
         questions_data = []
         try:
             chunks = self.document_processor.get_document_chunks(doc_id)
             if not chunks:
                 logger.warning(f"No chunks found for document {doc_id}")
-                return questions_data
+                return []
+            
+            logger.info(f"Found {len(chunks)} chunks for document {doc_id}")
             
             # Simple logic: Default 5, scale up for larger documents
             if max_questions is None:
@@ -36,62 +38,85 @@ class SimpleEvaluator:
                 else:
                     max_questions = 5
             
-            logger.info(f"Generating {max_questions} questions from {len(chunks)} chunks")
+            logger.info(f"Target: {max_questions} questions from {len(chunks)} chunks")
             
-            # Use all chunks that have reasonable content
-            usable_chunks = [
-                chunk for chunk in chunks 
-                if len(chunk.get("text", "").strip()) >= 50  # Lower threshold
-            ]
+            # Use ALL chunks, even small ones
+            usable_chunks = []
+            for chunk in chunks:
+                text = chunk.get("text", "").strip()
+                if len(text) >= 20:  # Very low threshold
+                    usable_chunks.append(chunk)
             
             if not usable_chunks:
-                logger.warning("No usable chunks found, using all chunks")
-                usable_chunks = chunks
+                logger.error("No usable chunks found - all chunks too short")
+                return []
             
             logger.info(f"Using {len(usable_chunks)} usable chunks")
             
-            # Simple approach: Generate one question per selected chunk
-            selected_chunks = self._select_chunks_evenly(usable_chunks, max_questions)
-            
+            # Try multiple strategies to ensure we get questions
             generated_questions = set()
             
-            for i, chunk in enumerate(selected_chunks):
+            # Strategy 1: Simple template questions
+            for i, chunk in enumerate(usable_chunks[:max_questions]):
                 if len(questions_data) >= max_questions:
                     break
                 
-                context_text = chunk.get("text", "").strip()
-                if len(context_text) < 30:  # Very minimal threshold
-                    continue
-                
                 try:
-                    # Simple, reliable question generation
-                    question = await self._generate_simple_reliable_question(context_text, i)
-                    
-                    if question and question.lower() not in generated_questions:
-                        # Generate expected answer
-                        expected_answer = await self._generate_simple_answer(question, context_text)
-                        
-                        if expected_answer and len(expected_answer.strip()) > 3:
-                            questions_data.append({
-                                "question": question,
-                                "expected_answer": expected_answer,
-                                "context": context_text[:200] + "...",
-                                "question_type": "general",
-                                "chunk_index": i
-                            })
-                            
-                            generated_questions.add(question.lower())
-                            logger.info(f"Generated Q{len(questions_data)}: {question[:60]}...")
-                
+                    question_data = await self._generate_template_question(chunk, i)
+                    if question_data and question_data['question'].lower() not in generated_questions:
+                        questions_data.append(question_data)
+                        generated_questions.add(question_data['question'].lower())
+                        logger.info(f"Generated template Q{len(questions_data)}: {question_data['question'][:50]}...")
                 except Exception as e:
-                    logger.error(f"Error generating question {i}: {str(e)}")
+                    logger.error(f"Error in template question {i}: {str(e)}")
                     continue
             
-            # If we don't have enough questions, try a backup approach
-            if len(questions_data) < 3:  # Minimum 3 questions
-                logger.info("Not enough questions generated, trying backup approach...")
-                backup_questions = await self._generate_backup_questions(usable_chunks, max_questions - len(questions_data), generated_questions)
-                questions_data.extend(backup_questions)
+            # Strategy 2: If we don't have enough, try basic questions
+            if len(questions_data) < 3:
+                logger.info("Not enough questions, trying basic approach...")
+                for i, chunk in enumerate(usable_chunks):
+                    if len(questions_data) >= max_questions:
+                        break
+                    
+                    try:
+                        question_data = await self._generate_basic_question(chunk, i)
+                        if question_data and question_data['question'].lower() not in generated_questions:
+                            questions_data.append(question_data)
+                            generated_questions.add(question_data['question'].lower())
+                            logger.info(f"Generated basic Q{len(questions_data)}: {question_data['question'][:50]}...")
+                    except Exception as e:
+                        logger.error(f"Error in basic question {i}: {str(e)}")
+                        continue
+            
+            # Strategy 3: Last resort - very simple questions
+            if len(questions_data) < 2:
+                logger.info("Still not enough questions, using last resort...")
+                simple_questions = [
+                    "What is the main topic discussed?",
+                    "What information is provided in the document?",
+                    "What does the text describe?",
+                    "What are the key points mentioned?",
+                    "What is explained in the content?"
+                ]
+                
+                for i, simple_q in enumerate(simple_questions[:max_questions]):
+                    if len(questions_data) >= max_questions:
+                        break
+                    
+                    if simple_q.lower() not in generated_questions:
+                        # Use the first chunk for context
+                        chunk = usable_chunks[0] if usable_chunks else chunks[0]
+                        context_text = chunk.get("text", "")[:300]
+                        
+                        questions_data.append({
+                            "question": simple_q,
+                            "expected_answer": f"Information from the document about {simple_q.lower().replace('?', '').replace('what ', '')}",
+                            "context": context_text + "...",
+                            "question_type": "simple",
+                            "chunk_index": i
+                        })
+                        generated_questions.add(simple_q.lower())
+                        logger.info(f"Generated simple Q{len(questions_data)}: {simple_q}")
             
             logger.info(f"Successfully generated {len(questions_data)} questions from document {doc_id}")
             return questions_data
@@ -100,131 +125,105 @@ class SimpleEvaluator:
             logger.error(f"Error in question generation: {str(e)}")
             return []
     
-    def _select_chunks_evenly(self, chunks: List[Dict], count: int) -> List[Dict]:
-        """Select chunks evenly distributed across the document"""
-        if len(chunks) <= count:
-            return chunks
-        
-        # Select chunks at regular intervals
-        step = len(chunks) / count
-        selected = []
-        
-        for i in range(count):
-            index = int(i * step)
-            if index < len(chunks):
-                selected.append(chunks[index])
-        
-        return selected
-    
-    async def _generate_simple_reliable_question(self, context_text: str, attempt: int) -> str:
-        """Generate a simple, reliable question"""
-        
-        # Use different approaches based on attempt number
-        approaches = [
-            f"Based on this text, create a simple question that starts with 'What':\n\n{context_text[:400]}\n\nQuestion:",
-            f"Create a question asking about the main topic in this text:\n\n{context_text[:400]}\n\nQuestion:",
-            f"What question can be answered from this text? Make it simple:\n\n{context_text[:400]}\n\nQuestion:",
-            f"Create a 'How' or 'Why' question from this text:\n\n{context_text[:400]}\n\nQuestion:",
-            f"Ask about something specific mentioned in this text:\n\n{context_text[:400]}\n\nQuestion:"
-        ]
-        
-        prompt = approaches[attempt % len(approaches)]
-        
-        try:
-            question = await self.rag_system._generate_with_gemini(prompt)
-            return self._clean_question(question)
-        except Exception as e:
-            logger.error(f"Error in question generation: {str(e)}")
-            return ""
-    
-    async def _generate_simple_answer(self, question: str, context_text: str) -> str:
-        """Generate a simple, direct answer"""
-        prompt = f"""Answer this question based on the text. Keep the answer concise (1-3 sentences):
-
-Question: {question}
-
-Text: {context_text}
-
-Answer:"""
-        
-        try:
-            answer = await self.rag_system._generate_with_gemini(prompt)
-            return answer.strip()
-        except Exception as e:
-            logger.error(f"Error generating answer: {str(e)}")
-            return ""
-    
-    async def _generate_backup_questions(self, chunks: List[Dict], needed: int, existing_questions: set) -> List[Dict]:
-        """Backup question generation method"""
-        backup_questions = []
+    async def _generate_template_question(self, chunk: Dict, index: int) -> Dict:
+        """Generate question using simple templates"""
+        context_text = chunk.get("text", "").strip()
         
         # Simple templates that usually work
         templates = [
-            "What is mentioned in the text?",
-            "What does the text describe?",
-            "What information is provided?",
-            "What is the main topic?",
-            "What is explained in the text?"
+            "What is mentioned about",
+            "What does the text say about", 
+            "What information is provided about",
+            "What is described regarding",
+            "What details are given about"
         ]
         
-        for i, chunk in enumerate(chunks[:needed * 2]):  # Try more chunks
-            if len(backup_questions) >= needed:
-                break
-            
-            context_text = chunk.get("text", "").strip()
-            if len(context_text) < 30:
-                continue
-            
-            try:
-                # Use a simple template
-                template = templates[i % len(templates)]
-                question = f"{template}"
-                
-                if question.lower() not in existing_questions:
-                    # Generate simple answer
-                    answer_prompt = f"Based on this text, answer: {question}\n\nText: {context_text[:300]}\n\nAnswer:"
-                    expected_answer = await self.rag_system._generate_with_gemini(answer_prompt)
-                    
-                    if expected_answer and len(expected_answer.strip()) > 3:
-                        backup_questions.append({
-                            "question": question,
-                            "expected_answer": expected_answer.strip(),
-                            "context": context_text[:200] + "...",
-                            "question_type": "backup",
-                            "chunk_index": i
-                        })
-                        
-                        existing_questions.add(question.lower())
-                        logger.info(f"Generated backup Q: {question}")
-            
-            except Exception as e:
-                logger.error(f"Error in backup question generation: {str(e)}")
-                continue
+        template = templates[index % len(templates)]
         
-        return backup_questions
+        try:
+            # Very simple prompt
+            prompt = f"Complete this question based on the text: '{template} ___?'\n\nText: {context_text[:200]}\n\nComplete question:"
+            
+            question = await self.rag_system._generate_with_gemini(prompt)
+            question = self._clean_question(question)
+            
+            if not question or len(question) < 10:
+                # Fallback to generic question
+                question = f"{template} the main topic?"
+            
+            # Generate simple answer
+            answer_prompt = f"Answer this question in 1-2 sentences based on the text:\n\nQuestion: {question}\nText: {context_text[:400]}\n\nAnswer:"
+            expected_answer = await self.rag_system._generate_with_gemini(answer_prompt)
+            
+            if not expected_answer:
+                expected_answer = "Information from the document"
+            
+            return {
+                "question": question,
+                "expected_answer": expected_answer.strip(),
+                "context": context_text[:200] + "...",
+                "question_type": "template",
+                "chunk_index": index
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in template question generation: {str(e)}")
+            return None
+    
+    async def _generate_basic_question(self, chunk: Dict, index: int) -> Dict:
+        """Generate very basic question"""
+        context_text = chunk.get("text", "").strip()
+        
+        try:
+            # Ultra-simple prompt
+            prompt = f"Create a simple question about this text:\n\n{context_text[:300]}\n\nQuestion:"
+            
+            question = await self.rag_system._generate_with_gemini(prompt)
+            question = self._clean_question(question)
+            
+            if not question:
+                question = "What is discussed in this text?"
+            
+            # Simple answer
+            expected_answer = context_text[:100] + "..." if len(context_text) > 100 else context_text
+            
+            return {
+                "question": question,
+                "expected_answer": expected_answer,
+                "context": context_text[:200] + "...",
+                "question_type": "basic",
+                "chunk_index": index
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in basic question generation: {str(e)}")
+            return None
     
     def _clean_question(self, question: str) -> str:
-        """Clean and format the question"""
+        """Clean and format the question - more robust"""
         if not question:
             return ""
         
         question = question.strip()
         
-        # Remove common prefixes
+        # Remove common prefixes - more comprehensive
         prefixes_to_remove = [
-            "Question:", "Q:", "Here's a question:", "Based on the text:",
-            "From the text:", "A question could be:", "One question is:",
-            "The question is:", "Question -", "Q -", "Here is a question:",
-            "A good question would be:", "The question could be:",
-            "Question about the text:", "Text question:"
+            "question:", "q:", "here's a question:", "based on the text:",
+            "from the text:", "a question could be:", "one question is:",
+            "the question is:", "question -", "q -", "here is a question:",
+            "a good question would be:", "the question could be:",
+            "question about the text:", "text question:", "complete question:",
+            "completed question:", "answer:"
         ]
         
+        question_lower = question.lower()
         for prefix in prefixes_to_remove:
-            if question.lower().startswith(prefix.lower()):
+            if question_lower.startswith(prefix):
                 question = question[len(prefix):].strip()
+                break
         
-        # Remove quotes
-        question = question.strip('"\'')
+        # Remove quotes and extra characters
+        question = question.strip('"\'`')
         
         # Ensure it ends with a question mark
         if question and not question.endswith('?'):
@@ -234,8 +233,8 @@ Answer:"""
         if question:
             question = question[0].upper() + question[1:]
         
-        # Basic validation
-        if len(question) < 10 or len(question) > 200:
+        # Basic validation - be more lenient
+        if len(question) < 5 or len(question) > 300:
             return ""
         
         return question
