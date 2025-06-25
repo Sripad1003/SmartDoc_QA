@@ -118,18 +118,36 @@ async def run_evaluation(request: EvaluationRequest):
         if request.dataset_type not in ["squad", "coqa", "custom"]:
             raise HTTPException(status_code=400, detail="Invalid dataset type")
 
-        # Run the comprehensive evaluation suite with document context if provided
+        # Check if we have any documents processed
+        if not doc_processor.processed_documents:
+            raise HTTPException(status_code=400, detail="No documents found. Please upload documents first.")
+
+        # If no specific doc_id provided, use the first available document
         doc_id = request.doc_id
         if not doc_id:
-            raise HTTPException(status_code=400, detail="Document ID is required for evaluation. Please upload documents first.")
+            # Get the first available document ID
+            doc_id = list(doc_processor.processed_documents.keys())[0]
+            logger.info(f"No doc_id provided, using first available document: {doc_id}")
+
+        # Verify the document exists
+        if doc_id not in doc_processor.processed_documents:
+            raise HTTPException(status_code=400, detail=f"Document {doc_id} not found")
+
+        # Check if document has sufficient content for evaluation
+        chunks = doc_processor.get_document_chunks(doc_id)
+        if len(chunks) < 3:
+            raise HTTPException(status_code=400, detail="Document has insufficient content for evaluation (need at least 3 chunks)")
 
         results = await evaluation_system.run_comprehensive_evaluation(doc_id=doc_id)
         evaluation_system.evaluation_results = results
 
         return {
             "message": "Comprehensive evaluation completed",
-            "results": results
+            "results": results,
+            "document_used": doc_id
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error running evaluation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

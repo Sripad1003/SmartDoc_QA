@@ -210,6 +210,15 @@ def run_evaluation(eval_type: str):
     """Run system evaluation"""
     with st.spinner(f"Running {eval_type.upper()} evaluation... This may take a few minutes."):
         try:
+            # First check if we have documents
+            stats_response = requests.get(f"{API_BASE_URL}/system-stats", timeout=10)
+            if stats_response.status_code == 200:
+                stats = stats_response.json()
+                doc_count = stats.get('documents', {}).get('total_processed', 0)
+                if doc_count == 0:
+                    st.error("❌ No documents found! Please upload documents first.")
+                    return
+            
             payload = {
                 "dataset_type": eval_type,
                 "include_performance": True
@@ -226,34 +235,42 @@ def run_evaluation(eval_type: str):
                 
                 st.success("✅ Evaluation completed!")
                 
+                # Check if there was an error in the results
+                if "error" in result.get("results", {}):
+                    st.error(f"❌ Evaluation error: {result['results']['error']}")
+                    return
+                
+                results_data = result.get('results', {})
+                
                 # Display summary metrics
-                summary = result.get('summary', {})
-                
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    f1_score = summary.get('squad_f1', 0.65)
-                    st.metric("F1 Score", f"{f1_score:.3f}", 
-                             delta=f"{f1_score - 0.75:.3f}" if f1_score > 0 else None)
-                
-                with col2:
-                    em_score = summary.get('squad_em', 0.7)
-                    st.metric("Exact Match", f"{em_score:.3f}",
-                             delta=f"{em_score - 0.65:.3f}" if em_score > 0 else None)
-                
-                with col3:
-                    response_time = summary.get('avg_response_time', 0.3)
-                    st.metric("Avg Response Time", f"{response_time:.2f}s",
-                             delta=f"{3.0 - response_time:.2f}s")
-                
-                with col4:
-                    error_rate = summary.get('error_rate', 0.2)
-                    st.metric("Error Rate", f"{error_rate:.3f}",
-                             delta=f"{0.01 - error_rate:.3f}")
+                if 'squad_results' in results_data:
+                    squad_results = results_data['squad_results']
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        f1_score = squad_results.get('average_f1', 0)
+                        st.metric("F1 Score", f"{f1_score:.3f}", 
+                                 delta=f"{f1_score - 0.75:.3f}" if f1_score > 0 else None)
+                    
+                    with col2:
+                        em_score = squad_results.get('exact_match_score', 0)
+                        st.metric("Exact Match", f"{em_score:.3f}",
+                                 delta=f"{em_score - 0.65:.3f}" if em_score > 0 else None)
+                    
+                    with col3:
+                        response_time = squad_results.get('average_response_time', 0)
+                        st.metric("Avg Response Time", f"{response_time:.2f}s",
+                                 delta=f"{3.0 - response_time:.2f}s")
+                    
+                    with col4:
+                        error_count = len(squad_results.get('errors', []))
+                        total_questions = squad_results.get('total_questions', 1)
+                        error_rate = error_count / total_questions
+                        st.metric("Error Rate", f"{error_rate:.3f}",
+                                 delta=f"{0.01 - error_rate:.3f}")
                 
                 # Detailed results
                 st.subheader("📈 Detailed Results")
-                
-                results_data = result.get('results', {})
                 
                 # SQUAD results
                 if 'squad_results' in results_data:
@@ -273,14 +290,27 @@ def run_evaluation(eval_type: str):
                     with squad_col3:
                         st.write(f"Errors: {len(squad_results.get('errors', []))}")
                     
+                    # Show individual predictions if available
+                    predictions = squad_results.get('predictions', [])
+                    if predictions:
+                        st.write("**Sample Predictions:**")
+                        for i, pred in enumerate(predictions[:3]):  # Show first 3
+                            with st.expander(f"Question {i+1}: {pred['question'][:60]}..."):
+                                st.write(f"**Question:** {pred['question']}")
+                                st.write(f"**Predicted:** {pred['predicted']}")
+                                st.write(f"**Expected:** {pred['expected']}")
+                                st.write(f"**F1 Score:** {pred['f1_score']:.3f}")
+                                st.write(f"**Exact Match:** {'✅ Yes' if pred['exact_match'] else '❌ No'}")
+                                st.write(f"**Confidence:** {pred.get('confidence', 0):.3f}")
+                    
                     # F1 Score distribution
                     f1_scores = squad_results.get('f1_scores', [])
-                    if f1_scores:
+                    if f1_scores and len(f1_scores) > 1:
                         st.write("**F1 Score Distribution:**")
                         if PLOTLY_AVAILABLE:
                             fig = px.histogram(
                                 x=f1_scores, 
-                                nbins=20, 
+                                nbins=min(10, len(f1_scores)), 
                                 title="F1 Score Distribution",
                                 labels={'x': 'F1 Score', 'y': 'Count'}
                             )
@@ -292,7 +322,7 @@ def run_evaluation(eval_type: str):
                             st.write(f"- Median F1: {statistics.median(f1_scores):.3f}")
                             st.write(f"- Min F1: {min(f1_scores):.3f}")
                             st.write(f"- Max F1: {max(f1_scores):.3f}")
-                            st.bar_chart({"F1 Scores": f1_scores[:20]})  # Show first 20 as simple bar chart
+                            st.bar_chart({"F1 Scores": f1_scores[:10]})  # Show first 10 as simple bar chart
                 
                 # Performance results
                 if 'performance_results' in results_data:
@@ -311,98 +341,106 @@ def run_evaluation(eval_type: str):
                     
                     with perf_col3:
                         st.write(f"Memory Usage: {perf_results.get('average_memory_usage', 0):.2f} MB")
-                    
-                    # Response time distribution
-                    response_times = perf_results.get('response_times', [])
-                    if response_times:
-                        st.write("**Response Time Distribution:**")
-                        if PLOTLY_AVAILABLE:
-                            fig = px.histogram(
-                                x=response_times,
-                                nbins=20,
-                                title="Response Time Distribution",
-                                labels={'x': 'Response Time (seconds)', 'y': 'Count'}
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            # Fallback to simple statistics
-                            import statistics
-                            st.write(f"- Average: {statistics.mean(response_times):.3f}s")
-                            st.write(f"- Median: {statistics.median(response_times):.3f}s")
-                            st.write(f"- Min: {min(response_times):.3f}s")
-                            st.write(f"- Max: {max(response_times):.3f}s")
-                            st.line_chart({"Response Times": response_times[:50]})  # Show first 50 as line chart
                 
                 # Performance grading
                 st.subheader("🎯 Performance Assessment")
                 
-                grade_col1, grade_col2 = st.columns(2)
-                
-                with grade_col1:
-                    # Accuracy grade
-                    if f1_score >= 0.8:
-                        accuracy_grade = "A+ (Excellent)"
-                        accuracy_color = "green"
-                    elif f1_score >= 0.75:
-                        accuracy_grade = "A (Very Good)"
-                        accuracy_color = "lightgreen"
-                    elif f1_score >= 0.7:
-                        accuracy_grade = "B (Good)"
-                        accuracy_color = "yellow"
-                    elif f1_score >= 0.6:
-                        accuracy_grade = "C (Acceptable)"
-                        accuracy_color = "orange"
-                    else:
-                        accuracy_grade = "D (Needs Improvement)"
-                        accuracy_color = "red"
+                if 'squad_results' in results_data:
+                    squad_results = results_data['squad_results']
+                    f1_score = squad_results.get('average_f1', 0)
+                    response_time = squad_results.get('average_response_time', 0)
                     
-                    st.markdown(f"**Accuracy Grade:** :{accuracy_color}[{accuracy_grade}]")
-                
-                with grade_col2:
-                    # Performance grade
-                    if response_time < 2.0:
-                        perf_grade = "A+ (Excellent)"
-                        perf_color = "green"
-                    elif response_time < 3.0:
-                        perf_grade = "A (Very Good)"
-                        perf_color = "lightgreen"
-                    elif response_time < 5.0:
-                        perf_grade = "B (Good)"
-                        perf_color = "yellow"
-                    elif response_time < 8.0:
-                        perf_grade = "C (Acceptable)"
-                        perf_color = "orange"
-                    else:
-                        perf_grade = "D (Needs Improvement)"
-                        perf_color = "red"
+                    grade_col1, grade_col2 = st.columns(2)
                     
-                    st.markdown(f"**Performance Grade:** :{perf_color}[{perf_grade}]")
+                    with grade_col1:
+                        # Accuracy grade
+                        if f1_score >= 0.8:
+                            accuracy_grade = "A+ (Excellent)"
+                            accuracy_color = "green"
+                        elif f1_score >= 0.75:
+                            accuracy_grade = "A (Very Good)"
+                            accuracy_color = "lightgreen"
+                        elif f1_score >= 0.7:
+                            accuracy_grade = "B (Good)"
+                            accuracy_color = "yellow"
+                        elif f1_score >= 0.6:
+                            accuracy_grade = "C (Acceptable)"
+                            accuracy_color = "orange"
+                        else:
+                            accuracy_grade = "D (Needs Improvement)"
+                            accuracy_color = "red"
+                        
+                        st.markdown(f"**Accuracy Grade:** :{accuracy_color}[{accuracy_grade}]")
+                    
+                    with grade_col2:
+                        # Performance grade
+                        if response_time < 2.0:
+                            perf_grade = "A+ (Excellent)"
+                            perf_color = "green"
+                        elif response_time < 3.0:
+                            perf_grade = "A (Very Good)"
+                            perf_color = "lightgreen"
+                        elif response_time < 5.0:
+                            perf_grade = "B (Good)"
+                            perf_color = "yellow"
+                        elif response_time < 8.0:
+                            perf_grade = "C (Acceptable)"
+                            perf_color = "orange"
+                        else:
+                            perf_grade = "D (Needs Improvement)"
+                            perf_color = "red"
+                        
+                        st.markdown(f"**Performance Grade:** :{perf_color}[{perf_grade}]")
+                    
+                    # Recommendations
+                    st.subheader("💡 Recommendations")
+                    
+                    recommendations = []
+                    
+                    if f1_score < 0.75:
+                        recommendations.append("🎯 **Improve Accuracy**: Consider fine-tuning retrieval parameters or improving document chunking")
+                    
+                    if response_time > 5.0:
+                        recommendations.append("⚡ **Optimize Performance**: Implement caching or optimize embedding generation")
+                    
+                    error_count = len(squad_results.get('errors', []))
+                    total_questions = squad_results.get('total_questions', 1)
+                    if error_count / total_questions > 0.05:
+                        recommendations.append("🛠️ **Reduce Errors**: Improve error handling and input validation")
+                    
+                    if not recommendations:
+                        recommendations.append("🎉 **Excellent Performance**: System meets production-quality standards!")
+                    
+                    for rec in recommendations:
+                        st.write(rec)
                 
-                # Recommendations
-                st.subheader("💡 Recommendations")
-                
-                recommendations = []
-                
-                if f1_score < 0.75:
-                    recommendations.append("🎯 **Improve Accuracy**: Consider fine-tuning retrieval parameters or improving document chunking")
-                
-                if response_time > 5.0:
-                    recommendations.append("⚡ **Optimize Performance**: Implement caching or optimize embedding generation")
-                
-                if error_rate > 0.05:
-                    recommendations.append("🛠️ **Reduce Errors**: Improve error handling and input validation")
-                
-                if not recommendations:
-                    recommendations.append("🎉 **Excellent Performance**: System meets production-quality standards!")
-                
-                for rec in recommendations:
-                    st.write(rec)
+                # Show document used for evaluation
+                doc_used = result.get('document_used')
+                if doc_used:
+                    st.info(f"📄 Evaluation performed using document: {doc_used}")
             
             else:
-                st.error(f"❌ Evaluation failed: {response.text}")
+                error_detail = ""
+                try:
+                    error_response = response.json()
+                    error_detail = error_response.get('detail', 'Unknown error')
+                except:
+                    error_detail = response.text
+                
+                st.error(f"❌ Evaluation failed: {error_detail}")
+                
+                # Show debugging information
+                st.write("**Debug Information:**")
+                st.write(f"- Status Code: {response.status_code}")
+                st.write(f"- Response: {response.text[:500]}")
         
+        except requests.exceptions.Timeout:
+            st.error("❌ Evaluation timed out. The system might be processing large documents.")
         except Exception as e:
             st.error(f"❌ Error running evaluation: {str(e)}")
+            import traceback
+            st.write("**Error Details:**")
+            st.code(traceback.format_exc())
 
 def get_evaluation_report():
     """Get detailed evaluation report"""

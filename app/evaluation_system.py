@@ -357,23 +357,34 @@ class EvaluationSystem:
         try:
             # Load sample data dynamically from document if doc_id provided
             if doc_id:
+                logger.info(f"Generating sample data from document: {doc_id}")
                 squad_sample = await self.generate_sample_data_from_document(doc_id)
+                if not squad_sample:
+                    logger.warning(f"No sample data generated from document {doc_id}, falling back to default sample")
+                    squad_sample = await self.load_squad_sample()
             else:
+                logger.info("No doc_id provided, using default SQUAD sample")
                 squad_sample = await self.load_squad_sample()
-            
+        
+            if not squad_sample:
+                raise Exception("No evaluation data available")
+        
+            logger.info(f"Using {len(squad_sample)} questions for evaluation")
+        
             # Run SQUAD evaluation
             logger.info("Running SQUAD evaluation...")
             results["squad_results"] = await self.evaluate_squad_format(squad_sample)
-            
+        
             # Run performance benchmark
             logger.info("Running performance benchmark...")
             test_questions = [item["question"] for item in squad_sample]
             results["performance_results"] = await self.benchmark_performance(test_questions)
-            
+        
             logger.info("Comprehensive evaluation completed successfully")
-            
+        
         except Exception as e:
             logger.error(f"Error in comprehensive evaluation: {str(e)}")
             results["error"] = str(e)
-        
+            # Don't raise the exception, return results with error info
+    
         return results
