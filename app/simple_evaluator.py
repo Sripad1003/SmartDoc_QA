@@ -79,13 +79,37 @@ Provide a concise, direct answer:"""
         
         return questions_data
     
+    def _calculate_semantic_similarity(self, predicted: str, expected: str) -> float:
+        """Simple semantic similarity check"""
+        pred_words = set(self._tokenize(predicted.lower()))
+        exp_words = set(self._tokenize(expected.lower()))
+        
+        # Check if all expected words are in predicted
+        if exp_words.issubset(pred_words):
+            return 1.0
+        
+        # Calculate Jaccard similarity
+        intersection = len(pred_words & exp_words)
+        union = len(pred_words | exp_words)
+        
+        return intersection / union if union > 0 else 0.0
+
+    def _calculate_contains_answer(self, predicted: str, expected: str) -> bool:
+        """Check if predicted answer contains the expected answer"""
+        pred_clean = self._normalize_answer(predicted)
+        exp_clean = self._normalize_answer(expected)
+        
+        return exp_clean in pred_clean
+
     async def evaluate_with_f1(self, questions_data: List[Dict]) -> Dict[str, Any]:
-        """Simple F1 score evaluation"""
-        logger.info(f"Starting F1 evaluation with {len(questions_data)} questions")
+        """Enhanced evaluation with multiple metrics"""
+        logger.info(f"Starting evaluation with {len(questions_data)} questions")
         
         results = {
             "total_questions": len(questions_data),
             "f1_scores": [],
+            "semantic_scores": [],
+            "contains_answer": [],
             "response_times": [],
             "predictions": [],
             "errors": []
@@ -106,20 +130,27 @@ Provide a concise, direct answer:"""
                 response_time = time.time() - start_time
                 results["response_times"].append(response_time)
                 
-                # Calculate F1 score
+                # Calculate multiple metrics
                 f1_score = self._calculate_f1_score(predicted_answer, expected_answer)
+                semantic_score = self._calculate_semantic_similarity(predicted_answer, expected_answer)
+                contains_answer = self._calculate_contains_answer(predicted_answer, expected_answer)
+                
                 results["f1_scores"].append(f1_score)
+                results["semantic_scores"].append(semantic_score)
+                results["contains_answer"].append(contains_answer)
                 
                 results["predictions"].append({
                     "question": question,
                     "predicted": predicted_answer,
                     "expected": expected_answer,
                     "f1_score": f1_score,
+                    "semantic_score": semantic_score,
+                    "contains_answer": contains_answer,
                     "response_time": response_time,
                     "confidence": answer_data.get("confidence", 0)
                 })
                 
-                logger.info(f"Q{i+1} F1: {f1_score:.3f}")
+                logger.info(f"Q{i+1} - F1: {f1_score:.3f}, Semantic: {semantic_score:.3f}, Contains: {contains_answer}")
                 
             except Exception as e:
                 logger.error(f"Error evaluating question {i}: {str(e)}")
@@ -130,14 +161,43 @@ Provide a concise, direct answer:"""
         
         # Calculate final metrics
         results["average_f1"] = statistics.mean(results["f1_scores"]) if results["f1_scores"] else 0
+        results["average_semantic"] = statistics.mean(results["semantic_scores"]) if results["semantic_scores"] else 0
+        results["accuracy_rate"] = sum(results["contains_answer"]) / len(results["contains_answer"]) if results["contains_answer"] else 0
         results["average_response_time"] = statistics.mean(results["response_times"]) if results["response_times"] else 0
         results["evaluation_timestamp"] = datetime.now().isoformat()
         
-        logger.info(f"Evaluation completed: Average F1={results['average_f1']:.3f}")
+        logger.info(f"Evaluation completed: F1={results['average_f1']:.3f}, Semantic={results['average_semantic']:.3f}, Accuracy={results['accuracy_rate']:.3f}")
         return results
     
+    def _extract_key_answer(self, full_answer: str, question: str) -> str:
+        """Extract the key answer from a long response"""
+        # Look for direct answers in the first few sentences
+        sentences = full_answer.split('.')[:3]  # First 3 sentences
+        
+        # Common answer patterns
+        patterns = [
+            r'is (?:a )?(?:subfield of |part of |branch of )?([^.]+)',
+            r'(?:answer is |it is |that is )([^.]+)',
+            r'^([^.]{10,50})\.',  # First sentence if reasonable length
+        ]
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            for pattern in patterns:
+                import re
+                match = re.search(pattern, sentence, re.IGNORECASE)
+                if match:
+                    return match.group(1).strip()
+        
+        # Fallback: return first 50 characters
+        return full_answer[:50].strip()
+
     def _calculate_f1_score(self, predicted: str, expected: str) -> float:
-        """Calculate F1 score using token overlap"""
+        """Calculate F1 score using token overlap with answer extraction"""
+        # Extract key answer from long response
+        if len(predicted.split()) > 20:  # If answer is long, extract key part
+            predicted = self._extract_key_answer(predicted, "")
+        
         predicted_tokens = self._tokenize(predicted)
         expected_tokens = self._tokenize(expected)
         

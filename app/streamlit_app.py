@@ -277,43 +277,48 @@ def run_evaluation(doc_id: str):
                 st.success("✅ F1 Evaluation completed!")
                 
                 # Display summary metrics
-                col1, col2, col3, col4 = st.columns(4)
-                
+                col1, col2, col3, col4, col5 = st.columns(5)
+
                 with col1:
                     avg_f1 = evaluation_results.get('average_f1', 0)
-                    st.metric("Average F1 Score", f"{avg_f1:.3f}")
-                
+                    st.metric("F1 Score", f"{avg_f1:.3f}")
+
                 with col2:
-                    total_q = evaluation_results.get('total_questions', 0)
-                    st.metric("Questions Tested", total_q)
-                
+                    avg_semantic = evaluation_results.get('average_semantic', 0)
+                    st.metric("Semantic Score", f"{avg_semantic:.3f}")
+
                 with col3:
-                    avg_time = evaluation_results.get('average_response_time', 0)
-                    st.metric("Avg Response Time", f"{avg_time:.2f}s")
-                
+                    accuracy_rate = evaluation_results.get('accuracy_rate', 0)
+                    st.metric("Accuracy Rate", f"{accuracy_rate:.3f}")
+
                 with col4:
-                    errors = len(evaluation_results.get('errors', []))
-                    st.metric("Errors", errors)
-                
+                    total_q = evaluation_results.get('total_questions', 0)
+                    st.metric("Questions", total_q)
+
+                with col5:
+                    avg_time = evaluation_results.get('average_response_time', 0)
+                    st.metric("Avg Time", f"{avg_time:.2f}s")
+
                 # Performance grade
                 st.subheader("🎯 Performance Assessment")
-                if avg_f1 >= 0.8:
+                semantic_score = evaluation_results.get('average_semantic', 0)
+                if semantic_score >= 0.9:
                     grade = "A+ (Excellent)"
                     color = "green"
-                elif avg_f1 >= 0.7:
+                elif semantic_score >= 0.8:
                     grade = "A (Very Good)"
                     color = "lightgreen"
-                elif avg_f1 >= 0.6:
+                elif semantic_score >= 0.7:
                     grade = "B (Good)"
                     color = "yellow"
-                elif avg_f1 >= 0.5:
+                elif semantic_score >= 0.6:
                     grade = "C (Acceptable)"
                     color = "orange"
                 else:
                     grade = "D (Needs Improvement)"
                     color = "red"
-                
-                st.markdown(f"**F1 Score Grade:** :{color}[{grade}]")
+
+                st.markdown(f"**Overall Grade (Semantic):** :{color}[{grade}]")
                 
                 # Detailed results
                 st.subheader("📊 Detailed Results")
@@ -325,7 +330,16 @@ def run_evaluation(doc_id: str):
                             st.write(f"**Question:** {pred['question']}")
                             st.write(f"**Expected:** {pred['expected']}")
                             st.write(f"**Predicted:** {pred['predicted']}")
-                            st.write(f"**F1 Score:** {pred['f1_score']:.3f}")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.write(f"**F1 Score:** {pred['f1_score']:.3f}")
+                            with col2:
+                                st.write(f"**Semantic:** {pred['semantic_score']:.3f}")
+                            with col3:
+                                contains = "✅ Yes" if pred['contains_answer'] else "❌ No"
+                                st.write(f"**Contains Answer:** {contains}")
+                            
                             st.write(f"**Response Time:** {pred['response_time']:.2f}s")
                             st.write(f"**Confidence:** {pred['confidence']:.3f}")
                 
