@@ -1,153 +1,316 @@
-import logging
-import os
-from typing import List, Dict, Any
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+import uvicorn
+from typing import List, Optional
+import asyncio
+from datetime import datetime
+import logging
+import uuid
+import time
 
-from core.document_processor import DocumentProcessor
-from core.rag import RAGSystem
-from .simple_evaluator import SimpleEvaluator  # Import SimpleEvaluator
+# Import our modules - FIXED IMPORTS
+from .document_processor import DocumentProcessor
+from .rag_system import RAGSystem
+from .config import Config
+from .simple_evaluator import SimpleEvaluator
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=getattr(logging, Config.LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(
+    title="Simple Document Q&A System",
+    version="1.0.0",
+    description="Clean document Q&A system with F1 evaluation"
+)
 
-# CORS configuration (adjust as needed for production)
-origins = [
-    "http://localhost",
-    "http://localhost:8000",
-    "http://localhost:3000",
-    "*",  # WARNING: This allows all origins.  Remove for production.
-]
-
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=Config.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Pydantic models
+class QuestionRequest(BaseModel):
+    question: str
+    session_id: Optional[str] = None
 
-class Settings(BaseModel):
-    pinecone_api_key: str
-    pinecone_environment: str
-    openai_api_key: str
-    anthropic_api_key: str
-    embedding_model: str = "openai"
-    llm_model: str = "openai"
-    index_name: str = "quickstart"
-    chunk_size: int = 512
-    chunk_overlap: int = 50
+# Initialize system components
+doc_processor = DocumentProcessor()
+rag_system = RAGSystem()
+evaluator = SimpleEvaluator(rag_system, doc_processor)
 
+# Simple session storage
+sessions = {}
 
 @app.on_event("startup")
 async def startup_event():
-    try:
-        # Load settings from environment variables
-        settings = Settings(
-            pinecone_api_key=os.environ["PINECONE_API_KEY"],
-            pinecone_environment=os.environ["PINECONE_ENVIRONMENT"],
-            openai_api_key=os.environ["OPENAI_API_KEY"],
-            anthropic_api_key=os.environ["ANTHROPIC_API_KEY"]
-        )
-
-        # Initialize RAG system and document processor
-        app.rag_system = RAGSystem(
-            pinecone_api_key=settings.pinecone_api_key,
-            pinecone_environment=settings.pinecone_environment,
-            openai_api_key=settings.openai_api_key,
-            anthropic_api_key=settings.anthropic_api_key,
-            embedding_model=settings.embedding_model,
-            llm_model=settings.llm_model,
-            index_name=settings.index_name,
-            chunk_size=settings.chunk_size,
-            chunk_overlap=settings.chunk_overlap
-        )
-        await app.rag_system.init_vectorstore()  # Initialize the vectorstore
-
-        app.document_processor = DocumentProcessor(
-            chunk_size=settings.chunk_size,
-            chunk_overlap=settings.chunk_overlap
-        )
-
-        app.evaluator = SimpleEvaluator(app.rag_system, app.document_processor)
-
-        logger.info("Application startup complete.")
-
-    except KeyError as e:
-        logger.error(f"Missing environment variable: {e}")
-        raise  # Re-raise the exception to prevent the app from starting
-
-    except Exception as e:
-        logger.error(f"Error during startup: {str(e)}")
-        raise  # Re-raise to prevent the app from starting
-
+    """Startup event"""
+    logger.info("🚀 Starting Simple Document Q&A System")
+    logger.info(f"Environment: {Config.ENVIRONMENT}")
 
 @app.get("/")
-async def read_root():
-    return {"message": "Welcome to the RAG API"}
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "Simple Document Q&A System",
+        "version": "1.0.0",
+        "features": [
+            "Document upload and processing",
+            "Question answering",
+            "Simple F1 evaluation",
+            "Question generation from documents"
+        ],
+        "endpoints": {
+            "upload": "/upload-documents",
+            "ask": "/ask-question",
+            "evaluate": "/evaluate/{doc_id}",
+            "questions": "/generate-questions/{doc_id}",
+            "documents": "/list-documents",
+            "health": "/health"
+        }
+    }
 
+@app.get("/health")
+async def health_check():
+    """Health check"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "documents_processed": len(doc_processor.processed_documents),
+        "chunks_indexed": len(rag_system.chunk_embeddings)
+    }
 
-@app.post("/upload")
-async def upload_document(url: str):
+@app.post("/upload-documents")
+async def upload_documents(files: List[UploadFile] = File(...)):
+    """Upload and process documents"""
     try:
-        doc_id = await app.rag_system.ingest_document(url)
-        return {"message": "Document uploaded successfully", "doc_id": doc_id}
-    except Exception as e:
-        logger.error(f"Error uploading document: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/query/{doc_id}")
-async def query_document(doc_id: str, query: str):
-    try:
-        response = await app.rag_system.query_document(doc_id, query)
-        return {"response": response}
-    except Exception as e:
-        logger.error(f"Error querying document: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/generate-questions/{doc_id}")
-async def generate_questions(doc_id: str, max_questions: int = 8):
-    try:
-        questions_data = await app.evaluator.generate_questions_from_document(doc_id, max_questions)
+        processed_docs = []
         
-        if not questions_data:
-            raise HTTPException(status_code=404, detail="No questions could be generated from this document")
+        for file in files:
+            content = await file.read()
+            
+            try:
+                start_time = time.time()
+                doc_id = await doc_processor.process_document(
+                    content, file.filename, file.content_type or "text/plain"
+                )
+                processing_time = time.time() - start_time
+                
+                doc_info = doc_processor.get_document_info(doc_id)
+                chunks = doc_processor.get_document_chunks(doc_id)
+                
+                # Index the document chunks
+                await rag_system.index_documents(chunks)
+                
+                processed_docs.append({
+                    "filename": file.filename,
+                    "doc_id": doc_id,
+                    "status": "processed",
+                    "chunks": len(chunks),
+                    "text_length": doc_info.get("text_length", 0),
+                    "processing_time": round(processing_time, 2)
+                })
+                
+                logger.info(f"Processed {file.filename} with {len(chunks)} chunks")
+                
+            except Exception as e:
+                logger.error(f"Error processing {file.filename}: {str(e)}")
+                processed_docs.append({
+                    "filename": file.filename,
+                    "status": "failed",
+                    "error": str(e)
+                })
         
-        # Extract just the questions for display
-        questions = [q_data["question"] for q_data in questions_data]
+        successful_count = len([d for d in processed_docs if d['status'] == 'processed'])
         
         return {
-            "questions": questions,
-            "questions_data": questions_data,
-            "questions_generated": len(questions_data),
-            "doc_id": doc_id
+            "documents": processed_docs,
+            "summary": {
+                "total_files": len(files),
+                "successful": successful_count,
+                "failed": len(files) - successful_count
+            },
+            "message": f"Processed {successful_count}/{len(files)} documents successfully"
         }
+    
+    except Exception as e:
+        logger.error(f"Error in upload_documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/list-documents")
+async def list_documents():
+    """List all processed documents"""
+    try:
+        documents = []
+        for doc_id, doc_info in doc_processor.processed_documents.items():
+            chunks = doc_processor.get_document_chunks(doc_id)
+            documents.append({
+                "doc_id": doc_id,
+                "filename": doc_info.get("filename", "Unknown"),
+                "processed_at": doc_info.get("processed_at", "Unknown"),
+                "chunk_count": len(chunks),
+                "text_length": doc_info.get("text_length", 0)
+            })
+        
+        return {
+            "total_documents": len(documents),
+            "documents": documents
+        }
+    
+    except Exception as e:
+        logger.error(f"Error listing documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/generate-questions/{doc_id}")
+async def generate_questions(doc_id: str, max_questions: int = 5):
+    """Generate questions from a document"""
+    try:
+        if doc_id not in doc_processor.processed_documents:
+            raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+        
+        doc_info = doc_processor.get_document_info(doc_id)
+        questions_data = await evaluator.generate_questions_from_document(doc_id, max_questions)
+        
+        if not questions_data:
+            raise HTTPException(status_code=400, detail="No questions could be generated from this document")
+        
+        questions = [item["question"] for item in questions_data]
+        
+        return {
+            "doc_id": doc_id,
+            "filename": doc_info.get("filename", "Unknown"),
+            "questions_generated": len(questions),
+            "questions": questions,
+            "questions_data": questions_data  # Full data for evaluation
+        }
+    
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error generating questions: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/evaluate/{doc_id}")
 async def evaluate_document(doc_id: str):
+    """Run F1 evaluation on a document"""
     try:
-        results = await app.evaluator.run_simple_evaluation(doc_id)
+        if doc_id not in doc_processor.processed_documents:
+            raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+        
+        results = await evaluator.run_simple_evaluation(doc_id)
         
         if "error" in results:
             raise HTTPException(status_code=400, detail=results["error"])
         
         return {
-            "results": results,
-            "doc_id": doc_id,
-            "evaluation_completed": True
+            "message": "Evaluation completed",
+            "results": results
         }
+    
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in evaluation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/ask-question")
+async def ask_question(request: QuestionRequest):
+    """Ask a question"""
+    try:
+        start_time = time.time()
+        
+        session_id = request.session_id or str(uuid.uuid4())
+        
+        # Get conversation history
+        conversation_history = sessions.get(session_id, [])
+        
+        # Generate answer
+        answer_data = await rag_system.generate_answer(
+            request.question, conversation_history[-5:]
+        )
+        
+        # Store interaction
+        interaction = {
+            "question": request.question,
+            "answer": answer_data["answer"],
+            "confidence": answer_data["confidence"],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if session_id not in sessions:
+            sessions[session_id] = []
+        sessions[session_id].append(interaction)
+        
+        # Keep only last 10 interactions
+        if len(sessions[session_id]) > 10:
+            sessions[session_id] = sessions[session_id][-10:]
+        
+        response_time = time.time() - start_time
+        
+        return {
+            "answer": answer_data["answer"],
+            "sources": answer_data["sources"],
+            "confidence": answer_data["confidence"],
+            "session_id": session_id,
+            "response_time": round(response_time, 3)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in ask_question: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/conversation-history/{session_id}")
+async def get_conversation_history(session_id: str):
+    """Get conversation history"""
+    try:
+        history = sessions.get(session_id, [])
+        
+        return {
+            "session_id": session_id,
+            "history": history,
+            "total_interactions": len(history)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error retrieving conversation history: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/system-stats")
+async def get_system_stats():
+    """Get system statistics"""
+    try:
+        processing_stats = doc_processor.get_processing_stats()
+        
+        return {
+            "documents": processing_stats,
+            "sessions": {
+                "active_sessions": len(sessions),
+                "total_interactions": sum(len(history) for history in sessions.values())
+            },
+            "system": {
+                "documents_processed": len(doc_processor.processed_documents),
+                "chunks_indexed": len(rag_system.chunk_embeddings),
+                "cache_size": len(rag_system.query_cache)
+            }
+        }
+    
+    except Exception as e:
+        logger.error(f"Error retrieving system stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "app.main:app",
+        host=Config.HOST,
+        port=Config.PORT,
+        log_level=Config.LOG_LEVEL.lower()
+    )
