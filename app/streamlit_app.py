@@ -179,8 +179,7 @@ def performance_metrics():
             eval_readiness = stats.get('evaluation_readiness', {})
             
             if not eval_readiness.get('documents_indexed', False):
-                st.warning("⚠️ No documents indexed. Please upload documents or add sample content first.")
-                
+                st.warning("⚠️ No documents indexed. Please upload documents first in the Q&A tab.")
                 return
             
             st.success("✅ System ready for evaluation!")
@@ -196,13 +195,17 @@ def performance_metrics():
     # Evaluation controls
     st.subheader("🚀 Run Evaluation")
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         if st.button("📋 Run SQUAD Evaluation", type="primary"):
             run_evaluation("squad")
     
     with col2:
+        if st.button("⚡ Run Performance Benchmark", type="secondary"):
+            run_benchmark()
+    
+    with col3:
         if st.button("📊 Get Evaluation Report", type="secondary"):
             get_evaluation_report()
 
@@ -442,6 +445,50 @@ def run_evaluation(eval_type: str):
             st.write("**Error Details:**")
             st.code(traceback.format_exc())
 
+def run_benchmark():
+    """Run performance benchmark"""
+    with st.spinner("Running performance benchmark..."):
+        try:
+            response = requests.post(f"{API_BASE_URL}/benchmark", timeout=120)
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                st.success("✅ Performance benchmark completed!")
+                
+                benchmark_results = result.get('results', {})
+                grade = result.get('grade', 'Unknown')
+                
+                # Display benchmark metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    avg_time = benchmark_results.get('average_response_time', 0)
+                    st.metric("Avg Response Time", f"{avg_time:.3f}s")
+                
+                with col2:
+                    p95_time = benchmark_results.get('p95_response_time', 0)
+                    st.metric("P95 Response Time", f"{p95_time:.3f}s")
+                
+                with col3:
+                    throughput = benchmark_results.get('throughput', 0)
+                    st.metric("Throughput", f"{throughput:.2f} req/s")
+                
+                with col4:
+                    error_rate = benchmark_results.get('error_rate', 0)
+                    st.metric("Error Rate", f"{error_rate:.3f}")
+                
+                # Show grade
+                st.subheader("🎯 Performance Grade")
+                grade_color = 'green' if 'A' in grade else 'yellow' if 'B' in grade else 'orange' if 'C' in grade else 'red'
+                st.markdown(f"**Overall Grade:** :{grade_color}[{grade}]")
+                
+            else:
+                st.error(f"❌ Benchmark failed: {response.text}")
+        
+        except Exception as e:
+            st.error(f"❌ Error running benchmark: {str(e)}")
+
 def get_evaluation_report():
     """Get detailed evaluation report"""
     with st.spinner("Generating comprehensive evaluation report..."):
@@ -449,7 +496,8 @@ def get_evaluation_report():
             response = requests.get(f"{API_BASE_URL}/evaluation-report", timeout=120)
             
             if response.status_code == 200:
-                report = response.text
+                result = response.json()
+                report = result.get('report', '')
                 
                 st.success("✅ Evaluation report generated!")
                 
@@ -500,6 +548,34 @@ def upload_and_qa():
             st.error("❌ Could not fetch system status")
     except Exception as e:
         st.error(f"❌ Error checking status: {str(e)}")
+    
+    st.divider()
+    
+    # Quick start section
+    st.subheader("🚀 Quick Start")
+    st.write("Get started quickly with a test document designed for evaluation!")
+    
+    if st.button("📄 Create Test Document", type="primary"):
+        with st.spinner("Creating test document..."):
+            try:
+                response = requests.post(f"{API_BASE_URL}/create-test-document", timeout=30)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    st.success(f"✅ Created: {result['filename']}")
+                    st.write(f"📄 {result['chunks']} chunks created")
+                    st.write(f"🆔 Document ID: {result['doc_id']}")
+                    if result.get('evaluation_ready'):
+                        st.info("🎯 System is now ready for evaluation!")
+                    
+                    # Force refresh
+                    time.sleep(1)
+                    st.experimental_rerun()
+                else:
+                    st.error(f"❌ Error: {response.text}")
+            
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
     
     st.divider()
     
@@ -565,8 +641,8 @@ def upload_and_qa():
                         
                         # Force refresh the page to update status
                         st.success("✅ Upload complete! The system status above should now show your documents.")
-                        if st.button("🔄 Refresh Status"):
-                            st.experimental_rerun()
+                        time.sleep(1)
+                        st.experimental_rerun()
                     
                     else:
                         st.error(f"❌ Error: {response.text}")
@@ -586,13 +662,13 @@ def upload_and_qa():
     # Sample questions for evaluation
     st.write("**Try these evaluation-focused questions:**")
     sample_questions = [
-        "What evaluation datasets are recommended for Q&A systems?",
-        "How is F1 score calculated for question answering?",
-        "What are the performance targets for the system?",
+        "What is F1 score and how is it calculated?",
+        "What are the performance targets for Q&A systems?",
         "Explain the difference between SQUAD and COQA evaluation",
-        "What metrics should be used to assess conversational coherence?",
-        "How should the system handle unanswerable questions?",
-        "What are the key components of a production-ready evaluation pipeline?"
+        "What is exact match score?",
+        "What are the best practices for document processing?",
+        "How should retrieval be optimized?",
+        "What evaluation datasets are recommended?"
     ]
     
     selected_question = st.selectbox("Choose a sample question:", [""] + sample_questions)
@@ -650,7 +726,7 @@ def upload_and_qa():
                             st.metric("Response Time", f"{response_time:.2f}s")
                         
                         with col3:
-                            st.metric("Sources Used", result.get('source_count', 0))
+                            st.metric("Sources Used", len(result.get('sources', [])))
                         
                         with col4:
                             answer_quality = result.get('answer_quality', {})
@@ -677,7 +753,7 @@ def upload_and_qa():
                                 st.markdown(f"**Confidence Grade:** :{grade_color}[{confidence_grade}]")
                         
                         # Display detailed sources
-                        if result['sources']:
+                        if result.get('sources'):
                             st.subheader("📚 Detailed Sources")
                             for i, source in enumerate(result['sources'], 1):
                                 with st.expander(f"Source {i}: {source['source']} (Similarity: {source['similarity']:.3f})"):
@@ -696,7 +772,7 @@ def conversation_history():
     st.header("💬 Conversation History & Metrics")
     
     if not st.session_state.get('session_id'):
-        st.info("No active session. Start a conversation to see history and metrics.")
+        st.info("No active session. Start a conversation in the Q&A tab to see history and metrics.")
         return
     
     try:
@@ -740,92 +816,6 @@ def conversation_history():
                         st.write("**Time:**", interaction['timestamp'][:19])
             else:
                 st.info("No history found.")
-        
-        else:
-            st.error(f"❌ Error: {response.text}")
-    
-    except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
-
-def system_stats():
-    """Enhanced system statistics with evaluation readiness"""
-    st.header("📈 System Statistics & Evaluation Readiness")
-    
-    try:
-        response = requests.get(f"{API_BASE_URL}/system-stats", timeout=10)
-        
-        if response.status_code == 200:
-            stats = response.json()
-            
-            # Evaluation readiness section
-            st.subheader("🎯 Evaluation Readiness")
-            eval_readiness = stats.get('evaluation_readiness', {})
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                docs_indexed = eval_readiness.get('documents_indexed', False)
-                st.metric("Documents Indexed", "✅ Yes" if docs_indexed else "❌ No")
-            
-            with col2:
-                eval_ready = eval_readiness.get('evaluation_system_ready', False)
-                st.metric("Evaluation System", "✅ Ready" if eval_ready else "❌ Not Ready")
-            
-            with col3:
-                prod_ready = eval_readiness.get('ready_for_production', False)
-                st.metric("Production Ready", "✅ Yes" if prod_ready else "❌ No")
-            
-            with col4:
-                supported_evals = eval_readiness.get('supported_evaluations', [])
-                st.metric("Supported Evaluations", len(supported_evals))
-            
-            if supported_evals:
-                st.write("**Supported Evaluation Types:**", ", ".join(supported_evals))
-            
-            # Document statistics
-            st.subheader("📄 Document Statistics")
-            doc_stats = stats.get('documents', {})
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Documents Processed", doc_stats.get('total_processed', 0))
-            with col2:
-                st.metric("Total Chunks", doc_stats.get('total_chunks', 0))
-            with col3:
-                st.metric("Total Text Length", doc_stats.get('total_text_length', 0))
-            
-            # Session statistics
-            st.subheader("💬 Session Statistics")
-            session_stats = stats.get('sessions', {})
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Active Sessions", session_stats.get('active_sessions', 0))
-            with col2:
-                st.metric("Total Interactions", session_stats.get('total_interactions', 0))
-            
-            # System configuration
-            st.subheader("⚙️ System Configuration")
-            config = stats.get('configuration', {})
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Max Chunk Size", config.get('max_chunk_size', 0))
-            with col2:
-                st.metric("Max Retrieval Chunks", config.get('max_retrieval_chunks', 0))
-            with col3:
-                st.metric("Max Answer Length", config.get('max_answer_length', 0))
-            with col4:
-                st.write(f"**Model**: {config.get('generation_model', 'Unknown')}")
-            
-            # Cache statistics
-            st.subheader("🗄️ Cache Statistics")
-            cache_stats = stats.get('cache', {})
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Query Cache Size", cache_stats.get('query_cache_size', 0))
-            with col2:
-                st.metric("Embedding Cache Size", cache_stats.get('embedding_cache_size', 0))
         
         else:
             st.error(f"❌ Error: {response.text}")

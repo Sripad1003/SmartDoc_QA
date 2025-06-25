@@ -89,7 +89,8 @@ async def root():
             "test": "/test-document",
             "evaluate": "/evaluate",
             "benchmark": "/benchmark",
-            "health": "/health"
+            "health": "/health",
+            "create-test-doc": "/create-test-document"
         }
     }
 
@@ -110,6 +111,115 @@ async def health_check():
             "max_answer_length": Config.MAX_ANSWER_LENGTH
         }
     }
+
+@app.post("/create-test-document")
+async def create_test_document():
+    """Create a test document for evaluation purposes"""
+    try:
+        test_content = """# Q&A System Evaluation Guide
+
+## Introduction to SQUAD Evaluation
+
+The Stanford Question Answering Dataset (SQUAD) is a reading comprehension dataset consisting of questions posed by crowdworkers on a set of Wikipedia articles. The answer to every question is a segment of text from the corresponding reading passage.
+
+## F1 Score Calculation
+
+The F1 score measures the overlap between the predicted answer and the ground truth answer. It is calculated as:
+
+F1 = 2 * (precision * recall) / (precision + recall)
+
+Where:
+- Precision = (number of shared words) / (number of words in prediction)
+- Recall = (number of shared words) / (number of words in ground truth)
+
+## Exact Match Score
+
+Exact Match (EM) measures the percentage of predictions that match any one of the ground truth answers exactly. This is a strict metric that requires perfect string matching after normalization.
+
+## Performance Targets
+
+For production Q&A systems, the following targets are recommended:
+- F1 Score: > 0.75 (75%)
+- Exact Match: > 0.65 (65%)
+- Response Time: < 5 seconds
+- Error Rate: < 1%
+
+## Evaluation Datasets
+
+### SQUAD 2.0
+SQUAD 2.0 combines the 100,000 questions in SQUAD 1.1 with over 50,000 unanswerable questions written adversarially by crowdworkers to look similar to answerable ones.
+
+### COQA
+The Conversational Question Answering dataset contains 127,000+ questions with answers collected from 8,000+ conversations. Each conversation is collected by pairing two crowdworkers to chat about a passage.
+
+### Natural Questions
+Natural Questions contains real anonymized, aggregated queries issued to the Google search engine. An annotator is presented with a question along with a Wikipedia page from the top 5 search results, and annotates a long answer and a short answer.
+
+## System Architecture
+
+A production Q&A system typically consists of:
+
+1. **Document Processing Pipeline**: Handles multiple formats (PDF, DOCX, TXT, HTML, Markdown)
+2. **Text Chunking**: Intelligent segmentation for optimal retrieval
+3. **Embedding Generation**: Vector representations using models like Google Gemini
+4. **Retrieval System**: Semantic search for relevant context
+5. **Answer Generation**: LLM-based response generation
+6. **Evaluation Framework**: Automated testing with SQUAD metrics
+
+## Best Practices
+
+### Document Processing
+- Support multiple file formats
+- Implement intelligent chunking strategies
+- Preserve document structure and metadata
+- Handle extraction errors gracefully
+
+### Retrieval Optimization
+- Use semantic similarity for chunk selection
+- Implement hybrid search (semantic + keyword)
+- Optimize chunk size for your domain
+- Consider context window limitations
+
+### Answer Quality
+- Implement confidence scoring
+- Provide source attribution
+- Handle unanswerable questions
+- Maintain conversation context
+
+### Performance Monitoring
+- Track response times
+- Monitor accuracy metrics
+- Log system errors
+- Implement health checks
+
+## Conclusion
+
+Building a production-ready Q&A system requires careful attention to evaluation metrics, system architecture, and performance optimization. Regular testing with datasets like SQUAD ensures your system meets quality standards."""
+
+        # Add the test document
+        doc_id = doc_processor.add_manual_content(
+            "QA_System_Evaluation_Guide.md",
+            test_content
+        )
+        
+        # Index the document chunks
+        chunks = doc_processor.get_document_chunks(doc_id)
+        await rag_system.index_documents(chunks)
+        
+        logger.info(f"Created test document with ID: {doc_id}")
+        
+        return {
+            "message": "Test document created successfully",
+            "doc_id": doc_id,
+            "filename": "QA_System_Evaluation_Guide.md",
+            "chunks": len(chunks),
+            "status": "processed",
+            "evaluation_ready": True
+        }
+    
+    except Exception as e:
+        logger.error(f"Error creating test document: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/evaluate")
 async def run_evaluation(request: EvaluationRequest):
@@ -158,11 +268,16 @@ async def get_evaluation_report():
     try:
         # Use the latest evaluation results stored in evaluation_system
         evaluation_results = getattr(evaluation_system, "evaluation_results", {})
+        if not evaluation_results:
+            raise HTTPException(status_code=400, detail="No evaluation results found. Please run evaluation first.")
+        
         report = evaluation_system.generate_evaluation_report(evaluation_results)
         return {
             "message": "Evaluation report generated",
             "report": report
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error generating evaluation report: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -171,13 +286,28 @@ async def get_evaluation_report():
 async def run_performance_benchmark():
     """Run performance benchmark"""
     try:
-        results = await evaluation_system.run_benchmark()
+        # Check if we have documents for benchmarking
+        if not doc_processor.processed_documents:
+            raise HTTPException(status_code=400, detail="No documents found for benchmarking. Please upload documents first.")
+        
+        # Get some test questions
+        test_questions = [
+            "What is F1 score?",
+            "How is exact match calculated?",
+            "What are the performance targets?",
+            "What is SQUAD evaluation?",
+            "How does COQA differ from SQUAD?"
+        ]
+        
+        results = await evaluation_system.benchmark_performance(test_questions)
         grade = _get_performance_grade(results)
         return {
             "message": "Performance benchmark completed",
             "results": results,
             "grade": grade
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error running benchmark: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -350,7 +480,6 @@ def _generate_processing_recommendations(text_analysis: dict, chunks: list) -> L
     
     return recommendations
 
-# Keep existing endpoints (upload, ask-question, etc.)
 @app.post("/upload-documents")
 async def upload_documents(files: List[UploadFile] = File(...)):
     """Enhanced document upload with evaluation readiness check"""
@@ -390,6 +519,8 @@ async def upload_documents(files: List[UploadFile] = File(...)):
                     "processing_time": round(processing_time, 2),
                     "evaluation_ready": evaluation_ready
                 })
+                
+                logger.info(f"Successfully processed {file.filename} with {len(chunks)} chunks")
                 
             except Exception as e:
                 logger.error(f"Error processing {file.filename}: {str(e)}")
