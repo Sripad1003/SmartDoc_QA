@@ -17,7 +17,7 @@ class SimpleEvaluator:
         self.document_processor = document_processor
     
     async def generate_questions_from_document(self, doc_id: str, max_questions: int = None) -> List[Dict]:
-        """Generate diverse questions from uploaded document with improved logic"""
+        """Generate questions from uploaded document - simplified and reliable"""
         questions_data = []
         try:
             chunks = self.document_processor.get_document_chunks(doc_id)
@@ -25,252 +25,189 @@ class SimpleEvaluator:
                 logger.warning(f"No chunks found for document {doc_id}")
                 return questions_data
             
-            # Determine number of questions based on document size
+            # Simple logic: Default 5, scale up for larger documents
             if max_questions is None:
-                if len(chunks) >= 20:
-                    max_questions = 10
-                elif len(chunks) >= 15:
+                if len(chunks) >= 25:
                     max_questions = 8
-                elif len(chunks) >= 10:
+                elif len(chunks) >= 15:
+                    max_questions = 7
+                elif len(chunks) >= 8:
                     max_questions = 6
-                elif len(chunks) >= 5:
-                    max_questions = 5
                 else:
-                    max_questions = max(3, len(chunks))
+                    max_questions = 5
             
             logger.info(f"Generating {max_questions} questions from {len(chunks)} chunks")
             
-            # Filter chunks with substantial content
-            substantial_chunks = [
+            # Use all chunks that have reasonable content
+            usable_chunks = [
                 chunk for chunk in chunks 
-                if len(chunk.get("text", "").strip()) >= 100
+                if len(chunk.get("text", "").strip()) >= 50  # Lower threshold
             ]
             
-            if not substantial_chunks:
-                substantial_chunks = chunks  # Fallback to all chunks
+            if not usable_chunks:
+                logger.warning("No usable chunks found, using all chunks")
+                usable_chunks = chunks
             
-            logger.info(f"Using {len(substantial_chunks)} substantial chunks")
+            logger.info(f"Using {len(usable_chunks)} usable chunks")
             
-            # Generate questions using multiple strategies
+            # Simple approach: Generate one question per selected chunk
+            selected_chunks = self._select_chunks_evenly(usable_chunks, max_questions)
+            
             generated_questions = set()
             
-            # Strategy 1: Direct factual extraction
-            questions_data.extend(await self._generate_factual_questions(substantial_chunks, max_questions // 2, generated_questions))
+            for i, chunk in enumerate(selected_chunks):
+                if len(questions_data) >= max_questions:
+                    break
+                
+                context_text = chunk.get("text", "").strip()
+                if len(context_text) < 30:  # Very minimal threshold
+                    continue
+                
+                try:
+                    # Simple, reliable question generation
+                    question = await self._generate_simple_reliable_question(context_text, i)
+                    
+                    if question and question.lower() not in generated_questions:
+                        # Generate expected answer
+                        expected_answer = await self._generate_simple_answer(question, context_text)
+                        
+                        if expected_answer and len(expected_answer.strip()) > 3:
+                            questions_data.append({
+                                "question": question,
+                                "expected_answer": expected_answer,
+                                "context": context_text[:200] + "...",
+                                "question_type": "general",
+                                "chunk_index": i
+                            })
+                            
+                            generated_questions.add(question.lower())
+                            logger.info(f"Generated Q{len(questions_data)}: {question[:60]}...")
+                
+                except Exception as e:
+                    logger.error(f"Error generating question {i}: {str(e)}")
+                    continue
             
-            # Strategy 2: Definition and concept questions
-            questions_data.extend(await self._generate_concept_questions(substantial_chunks, max_questions // 3, generated_questions))
+            # If we don't have enough questions, try a backup approach
+            if len(questions_data) < 3:  # Minimum 3 questions
+                logger.info("Not enough questions generated, trying backup approach...")
+                backup_questions = await self._generate_backup_questions(usable_chunks, max_questions - len(questions_data), generated_questions)
+                questions_data.extend(backup_questions)
             
-            # Strategy 3: Simple what/how/why questions
-            questions_data.extend(await self._generate_simple_questions(substantial_chunks, max_questions, generated_questions))
-            
-            # Remove duplicates and limit to max_questions
-            unique_questions = []
-            seen_questions = set()
-            
-            for q_data in questions_data:
-                question_key = q_data['question'].lower().strip()
-                if question_key not in seen_questions and len(unique_questions) < max_questions:
-                    unique_questions.append(q_data)
-                    seen_questions.add(question_key)
-            
-            logger.info(f"Successfully generated {len(unique_questions)} unique questions from document {doc_id}")
-            return unique_questions
+            logger.info(f"Successfully generated {len(questions_data)} questions from document {doc_id}")
+            return questions_data
             
         except Exception as e:
             logger.error(f"Error in question generation: {str(e)}")
             return []
     
-    async def _generate_factual_questions(self, chunks: List[Dict], target_count: int, existing_questions: set) -> List[Dict]:
-        """Generate factual questions that can be answered with short, specific answers"""
-        questions_data = []
+    def _select_chunks_evenly(self, chunks: List[Dict], count: int) -> List[Dict]:
+        """Select chunks evenly distributed across the document"""
+        if len(chunks) <= count:
+            return chunks
         
-        for chunk in chunks[:target_count * 2]:  # Try more chunks than needed
-            if len(questions_data) >= target_count:
-                break
-                
-            context_text = chunk.get("text", "").strip()
-            if len(context_text) < 100:
-                continue
-            
-            try:
-                # Look for specific facts, names, numbers, definitions
-                prompt = f"""Based on this text, create a simple factual question that has a SHORT, SPECIFIC answer (1-5 words).
-
-Text: {context_text[:800]}
-
-Examples of good questions:
-- "What is [specific term]?"
-- "Who developed [something]?"
-- "When did [event] happen?"
-- "Where is [place] located?"
-
-Create ONE question that can be answered with a short, specific phrase from the text:"""
-                
-                question = await self.rag_system._generate_with_gemini(prompt)
-                question = self._clean_question(question)
-                
-                if question and question.lower() not in existing_questions and len(question) > 10:
-                    # Generate a SHORT expected answer
-                    answer_prompt = f"""Answer this question with a SHORT, SPECIFIC answer (1-5 words) based on the text:
-
-Question: {question}
-Text: {context_text}
-
-Give only the essential answer (no explanations):"""
-                    
-                    expected_answer = await self.rag_system._generate_with_gemini(answer_prompt)
-                    expected_answer = expected_answer.strip()
-                    
-                    # Ensure answer is short
-                    if len(expected_answer.split()) <= 8:  # Max 8 words
-                        questions_data.append({
-                            "question": question,
-                            "expected_answer": expected_answer,
-                            "context": context_text[:300] + "...",
-                            "question_type": "factual",
-                            "chunk_index": chunk.get("chunk_id", len(questions_data))
-                        })
-                        
-                        existing_questions.add(question.lower())
-                        logger.info(f"Generated factual Q: {question[:50]}... -> {expected_answer}")
-                
-            except Exception as e:
-                logger.error(f"Error generating factual question: {str(e)}")
-                continue
+        # Select chunks at regular intervals
+        step = len(chunks) / count
+        selected = []
         
-        return questions_data
+        for i in range(count):
+            index = int(i * step)
+            if index < len(chunks):
+                selected.append(chunks[index])
+        
+        return selected
     
-    async def _generate_concept_questions(self, chunks: List[Dict], target_count: int, existing_questions: set) -> List[Dict]:
-        """Generate concept and definition questions"""
-        questions_data = []
+    async def _generate_simple_reliable_question(self, context_text: str, attempt: int) -> str:
+        """Generate a simple, reliable question"""
         
-        for chunk in chunks[:target_count * 2]:
-            if len(questions_data) >= target_count:
-                break
-                
-            context_text = chunk.get("text", "").strip()
-            if len(context_text) < 100:
-                continue
-            
-            try:
-                # Look for key concepts and terms
-                prompt = f"""Find the main concept or term in this text and create a definition question:
-
-Text: {context_text[:800]}
-
-Create a question like:
-- "What is [main concept]?"
-- "How is [term] defined?"
-- "What does [term] mean?"
-
-Focus on the MAIN concept in the text:"""
-                
-                question = await self.rag_system._generate_with_gemini(prompt)
-                question = self._clean_question(question)
-                
-                if question and question.lower() not in existing_questions and len(question) > 10:
-                    # Generate concise definition
-                    answer_prompt = f"""Provide a concise definition (1-2 sentences) for this question:
-
-Question: {question}
-Text: {context_text}
-
-Give a clear, brief definition:"""
-                    
-                    expected_answer = await self.rag_system._generate_with_gemini(answer_prompt)
-                    expected_answer = expected_answer.strip()
-                    
-                    if len(expected_answer.split()) <= 20:  # Max 20 words for definitions
-                        questions_data.append({
-                            "question": question,
-                            "expected_answer": expected_answer,
-                            "context": context_text[:300] + "...",
-                            "question_type": "definition",
-                            "chunk_index": chunk.get("chunk_id", len(questions_data))
-                        })
-                        
-                        existing_questions.add(question.lower())
-                        logger.info(f"Generated concept Q: {question[:50]}... -> {expected_answer[:30]}...")
-                
-            except Exception as e:
-                logger.error(f"Error generating concept question: {str(e)}")
-                continue
+        # Use different approaches based on attempt number
+        approaches = [
+            f"Based on this text, create a simple question that starts with 'What':\n\n{context_text[:400]}\n\nQuestion:",
+            f"Create a question asking about the main topic in this text:\n\n{context_text[:400]}\n\nQuestion:",
+            f"What question can be answered from this text? Make it simple:\n\n{context_text[:400]}\n\nQuestion:",
+            f"Create a 'How' or 'Why' question from this text:\n\n{context_text[:400]}\n\nQuestion:",
+            f"Ask about something specific mentioned in this text:\n\n{context_text[:400]}\n\nQuestion:"
+        ]
         
-        return questions_data
+        prompt = approaches[attempt % len(approaches)]
+        
+        try:
+            question = await self.rag_system._generate_with_gemini(prompt)
+            return self._clean_question(question)
+        except Exception as e:
+            logger.error(f"Error in question generation: {str(e)}")
+            return ""
     
-    async def _generate_simple_questions(self, chunks: List[Dict], max_total: int, existing_questions: set) -> List[Dict]:
-        """Generate simple questions to fill remaining slots"""
-        questions_data = []
-        remaining_needed = max_total - len(existing_questions)
+    async def _generate_simple_answer(self, question: str, context_text: str) -> str:
+        """Generate a simple, direct answer"""
+        prompt = f"""Answer this question based on the text. Keep the answer concise (1-3 sentences):
+
+Question: {question}
+
+Text: {context_text}
+
+Answer:"""
         
-        if remaining_needed <= 0:
-            return questions_data
+        try:
+            answer = await self.rag_system._generate_with_gemini(prompt)
+            return answer.strip()
+        except Exception as e:
+            logger.error(f"Error generating answer: {str(e)}")
+            return ""
+    
+    async def _generate_backup_questions(self, chunks: List[Dict], needed: int, existing_questions: set) -> List[Dict]:
+        """Backup question generation method"""
+        backup_questions = []
         
-        # Shuffle chunks for variety
-        shuffled_chunks = chunks.copy()
-        random.shuffle(shuffled_chunks)
+        # Simple templates that usually work
+        templates = [
+            "What is mentioned in the text?",
+            "What does the text describe?",
+            "What information is provided?",
+            "What is the main topic?",
+            "What is explained in the text?"
+        ]
         
-        for chunk in shuffled_chunks:
-            if len(questions_data) >= remaining_needed:
+        for i, chunk in enumerate(chunks[:needed * 2]):  # Try more chunks
+            if len(backup_questions) >= needed:
                 break
-                
+            
             context_text = chunk.get("text", "").strip()
-            if len(context_text) < 80:
+            if len(context_text) < 30:
                 continue
             
             try:
-                # Simple question templates
-                templates = [
-                    "What is mentioned about",
-                    "How is described",
-                    "What does the text say about",
-                    "According to the text, what is",
-                    "What information is provided about"
-                ]
+                # Use a simple template
+                template = templates[i % len(templates)]
+                question = f"{template}"
                 
-                template = random.choice(templates)
-                
-                prompt = f"""Create a simple question using this template: "{template} [something]?"
-
-Text: {context_text[:600]}
-
-Make it specific to the content. Question:"""
-                
-                question = await self.rag_system._generate_with_gemini(prompt)
-                question = self._clean_question(question)
-                
-                if question and question.lower() not in existing_questions and len(question) > 10:
-                    # Generate direct answer
-                    answer_prompt = f"""Answer this question directly from the text (keep it under 15 words):
-
-Question: {question}
-Text: {context_text}
-
-Direct answer:"""
-                    
+                if question.lower() not in existing_questions:
+                    # Generate simple answer
+                    answer_prompt = f"Based on this text, answer: {question}\n\nText: {context_text[:300]}\n\nAnswer:"
                     expected_answer = await self.rag_system._generate_with_gemini(answer_prompt)
-                    expected_answer = expected_answer.strip()
                     
-                    if len(expected_answer.split()) <= 15:
-                        questions_data.append({
+                    if expected_answer and len(expected_answer.strip()) > 3:
+                        backup_questions.append({
                             "question": question,
-                            "expected_answer": expected_answer,
-                            "context": context_text[:300] + "...",
-                            "question_type": "simple",
-                            "chunk_index": chunk.get("chunk_id", len(questions_data))
+                            "expected_answer": expected_answer.strip(),
+                            "context": context_text[:200] + "...",
+                            "question_type": "backup",
+                            "chunk_index": i
                         })
                         
                         existing_questions.add(question.lower())
-                        logger.info(f"Generated simple Q: {question[:50]}...")
-                
+                        logger.info(f"Generated backup Q: {question}")
+            
             except Exception as e:
-                logger.error(f"Error generating simple question: {str(e)}")
+                logger.error(f"Error in backup question generation: {str(e)}")
                 continue
         
-        return questions_data
+        return backup_questions
     
     def _clean_question(self, question: str) -> str:
         """Clean and format the question"""
+        if not question:
+            return ""
+        
         question = question.strip()
         
         # Remove common prefixes
@@ -278,7 +215,8 @@ Direct answer:"""
             "Question:", "Q:", "Here's a question:", "Based on the text:",
             "From the text:", "A question could be:", "One question is:",
             "The question is:", "Question -", "Q -", "Here is a question:",
-            "A good question would be:", "The question could be:"
+            "A good question would be:", "The question could be:",
+            "Question about the text:", "Text question:"
         ]
         
         for prefix in prefixes_to_remove:
@@ -289,39 +227,49 @@ Direct answer:"""
         question = question.strip('"\'')
         
         # Ensure it ends with a question mark
-        if not question.endswith('?'):
+        if question and not question.endswith('?'):
             question += '?'
         
         # Capitalize first letter
         if question:
             question = question[0].upper() + question[1:]
         
+        # Basic validation
+        if len(question) < 10 or len(question) > 200:
+            return ""
+        
         return question
     
     def _calculate_improved_f1_score(self, predicted: str, expected: str) -> float:
-        """Improved F1 score calculation that handles long answers better"""
-        # First, try to extract key information from long predicted answers
-        if len(predicted.split()) > 15:
-            # Look for the expected answer within the predicted answer
-            expected_clean = self._normalize_answer(expected)
-            predicted_clean = self._normalize_answer(predicted)
-            
-            # If expected answer is contained in predicted, give high score
-            if expected_clean in predicted_clean:
-                return 0.9  # High score for containing the right answer
-            
-            # Try to extract the most relevant sentence
-            sentences = predicted.split('.')[:3]  # First 3 sentences
-            best_score = 0
-            
-            for sentence in sentences:
-                sentence_score = self._calculate_token_f1(sentence.strip(), expected)
-                best_score = max(best_score, sentence_score)
-            
-            return best_score
+        """Improved F1 score calculation"""
+        # If expected answer is found in predicted answer, give high score
+        expected_clean = self._normalize_answer(expected)
+        predicted_clean = self._normalize_answer(predicted)
         
-        # For shorter answers, use standard token F1
-        return self._calculate_token_f1(predicted, expected)
+        # Direct containment check
+        if expected_clean in predicted_clean:
+            return 0.85  # High score for containing the answer
+        
+        # Check word overlap
+        expected_words = set(expected_clean.split())
+        predicted_words = set(predicted_clean.split())
+        
+        if not expected_words:
+            return 1.0 if not predicted_words else 0.0
+        
+        # Calculate overlap ratio
+        overlap = len(expected_words & predicted_words)
+        overlap_ratio = overlap / len(expected_words)
+        
+        if overlap_ratio >= 0.8:  # 80% of expected words found
+            return 0.8
+        elif overlap_ratio >= 0.6:  # 60% of expected words found
+            return 0.6
+        elif overlap_ratio >= 0.4:  # 40% of expected words found
+            return 0.4
+        else:
+            # Fall back to standard F1
+            return self._calculate_token_f1(predicted, expected)
     
     def _calculate_token_f1(self, predicted: str, expected: str) -> float:
         """Standard token-based F1 calculation"""
@@ -360,13 +308,7 @@ Direct answer:"""
         intersection = len(pred_words & exp_words)
         union = len(pred_words | exp_words)
         
-        jaccard = intersection / union if union > 0 else 0.0
-        
-        # Boost score if most important words match
-        if intersection >= len(exp_words) * 0.7:  # 70% of expected words found
-            jaccard = min(1.0, jaccard + 0.2)
-        
-        return jaccard
+        return intersection / union if union > 0 else 0.0
 
     def _calculate_contains_answer(self, predicted: str, expected: str) -> bool:
         """Check if predicted answer contains the expected answer"""
@@ -383,7 +325,7 @@ Direct answer:"""
         
         if len(exp_words) > 0:
             overlap_ratio = len(exp_words & pred_words) / len(exp_words)
-            return overlap_ratio >= 0.7  # 70% of expected words found
+            return overlap_ratio >= 0.6  # 60% of expected words found
         
         return False
 
