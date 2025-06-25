@@ -517,8 +517,18 @@ async def get_system_stats():
         # Get processing stats
         processing_stats = doc_processor.get_processing_stats()
         
+        # Debug information
+        logger.info(f"Debug - Processed documents: {list(doc_processor.processed_documents.keys())}")
+        logger.info(f"Debug - Chunk embeddings count: {len(rag_system.chunk_embeddings)}")
+        
         return {
             "documents": processing_stats,
+            "debug_info": {
+                "processed_document_ids": list(doc_processor.processed_documents.keys()),
+                "processed_document_count": len(doc_processor.processed_documents),
+                "chunk_embeddings_count": len(rag_system.chunk_embeddings),
+                "chunks_db_keys": list(doc_processor.chunks_db.keys())
+            },
             "sessions": {
                 "active_sessions": len(sessions),
                 "total_interactions": sum(len(history) for history in sessions.values())

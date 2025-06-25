@@ -475,6 +475,32 @@ def upload_and_qa():
     """Enhanced upload and Q&A interface"""
     st.header("📄 Document Upload & Question Answering")
     
+    # Debug section - show current document status
+    st.subheader("🔍 Current System Status")
+    try:
+        response = requests.get(f"{API_BASE_URL}/system-stats", timeout=10)
+        if response.status_code == 200:
+            stats = response.json()
+            debug_info = stats.get('debug_info', {})
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Documents Processed", debug_info.get('processed_document_count', 0))
+            with col2:
+                st.metric("Chunks Indexed", debug_info.get('chunk_embeddings_count', 0))
+            with col3:
+                doc_ids = debug_info.get('processed_document_ids', [])
+                st.metric("Document IDs", len(doc_ids))
+            
+            if doc_ids:
+                st.success(f"✅ Documents found: {', '.join(doc_ids[:3])}{'...' if len(doc_ids) > 3 else ''}")
+            else:
+                st.warning("⚠️ No documents currently indexed")
+        else:
+            st.error("❌ Could not fetch system status")
+    except Exception as e:
+        st.error(f"❌ Error checking status: {str(e)}")
+    
     st.divider()
     
     # Document upload
@@ -523,6 +549,7 @@ def upload_and_qa():
                             if doc['status'] == 'processed':
                                 eval_status = "✅ Ready" if doc.get('evaluation_ready') else "⚠️ Limited"
                                 st.success(f"✅ **{doc['filename']}** - Evaluation: {eval_status}")
+                                st.info(f"📄 Document ID: {doc['doc_id']}")
                                 
                                 col1, col2, col3, col4 = st.columns(4)
                                 with col1:
@@ -535,12 +562,21 @@ def upload_and_qa():
                                     st.write(f"Eval Ready: {'Yes' if doc.get('evaluation_ready') else 'No'}")
                             else:
                                 st.error(f"❌ **{doc['filename']}**: {doc.get('error', 'Unknown error')}")
+                        
+                        # Force refresh the page to update status
+                        st.success("✅ Upload complete! The system status above should now show your documents.")
+                        if st.button("🔄 Refresh Status"):
+                            st.experimental_rerun()
                     
                     else:
                         st.error(f"❌ Error: {response.text}")
                 
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
+    
+    # Add a manual refresh button
+    if st.button("🔄 Refresh Document Status"):
+        st.experimental_rerun()
     
     st.divider()
     
