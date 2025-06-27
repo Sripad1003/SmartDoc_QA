@@ -122,7 +122,7 @@ def upload_and_qa():
                                 st.error(f"❌ {doc['filename']}: {doc.get('error', 'Unknown error')}")
                         
                         time.sleep(1)
-                        st.rerun()  # Fixed: Use st.rerun() instead of st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error(f"❌ Error: {response.text}")
                 
@@ -134,27 +134,39 @@ def upload_and_qa():
     # Q&A Section
     st.subheader("❓ Ask Questions")
     
-    # Initialize session state
-    if 'session_id' not in st.session_state:
-        st.session_state.session_id = None
+    # Initialize session state for session management
+    if 'current_session_id' not in st.session_state:
+        st.session_state.current_session_id = None
+    if 'all_sessions' not in st.session_state:
+        st.session_state.all_sessions = []
+    
+    # Session management
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if st.session_state.current_session_id:
+            st.info(f"🔗 Current Session: {st.session_state.current_session_id[:8]}...")
+        else:
+            st.info("🆕 No active session")
+    
+    with col2:
+        if st.button("🔄 New Session"):
+            # Save current session to history before creating new one
+            if st.session_state.current_session_id and st.session_state.current_session_id not in st.session_state.all_sessions:
+                st.session_state.all_sessions.append(st.session_state.current_session_id)
+            
+            # Clear current session
+            st.session_state.current_session_id = None
+            st.success("New session will be created with your next question!")
     
     # Question input
     question = st.text_input("Enter your question:")
     
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        ask_button = st.button("🎯 Ask Question", type="primary", disabled=not question)
-    with col2:
-        if st.button("🔄 New Session"):
-            st.session_state.session_id = None
-            st.success("New session started!")
-    
-    if ask_button and question:
+    if st.button("🎯 Ask Question", type="primary", disabled=not question):
         with st.spinner("Generating answer..."):
             try:
                 payload = {
                     "question": question,
-                    "session_id": st.session_state.session_id
+                    "session_id": st.session_state.current_session_id
                 }
                 
                 response = requests.post(
@@ -166,8 +178,12 @@ def upload_and_qa():
                 if response.status_code == 200:
                     result = response.json()
                     
-                    # Store session ID
-                    st.session_state.session_id = result['session_id']
+                    # Update current session ID
+                    st.session_state.current_session_id = result['session_id']
+                    
+                    # Add to all sessions if not already there
+                    if result['session_id'] not in st.session_state.all_sessions:
+                        st.session_state.all_sessions.append(result['session_id'])
                     
                     # Display answer
                     st.subheader("💡 Answer")
@@ -395,38 +411,124 @@ def run_evaluation(doc_id: str):
             st.error(f"❌ Error: {str(e)}")
 
 def conversation_history():
-    """Show conversation history"""
+    """Show conversation history with improved session management"""
     st.header("💬 Conversation History")
     
-    if not st.session_state.get('session_id'):
-        st.info("No active session. Start a conversation in the Upload & Q&A tab.")
+    # Initialize session state if not exists
+    if 'all_sessions' not in st.session_state:
+        st.session_state.all_sessions = []
+    if 'current_session_id' not in st.session_state:
+        st.session_state.current_session_id = None
+    
+    # Add current session to all sessions if it exists and not already there
+    if (st.session_state.current_session_id and 
+        st.session_state.current_session_id not in st.session_state.all_sessions):
+        st.session_state.all_sessions.append(st.session_state.current_session_id)
+    
+    # Show all available sessions
+    all_sessions = st.session_state.all_sessions.copy()
+    if st.session_state.current_session_id and st.session_state.current_session_id not in all_sessions:
+        all_sessions.append(st.session_state.current_session_id)
+    
+    if not all_sessions:
+        st.info("💬 No conversation sessions found. Start a conversation in the Upload & Q&A tab to see history.")
         return
     
-    try:
-        response = requests.get(f"{API_BASE_URL}/conversation-history/{st.session_state.session_id}", timeout=10)
-        
-        if response.status_code == 200:
-            result = response.json()
-            history = result['history']
-            
-            st.write(f"**Session ID:** {result['session_id']}")
-            st.write(f"**Total Interactions:** {result['total_interactions']}")
-            
-            if history:
-                for i, interaction in enumerate(reversed(history), 1):
-                    with st.expander(f"Q{i}: {interaction['question'][:60]}..."):
-                        st.write(f"**Question:** {interaction['question']}")
-                        st.write(f"**Answer:** {interaction['answer']}")
-                        st.write(f"**Confidence:** {interaction['confidence']:.3f}")
-                        st.write(f"**Time:** {interaction['timestamp'][:19]}")
-            else:
-                st.info("No conversation history found.")
-        
-        else:
-            st.error(f"❌ Error: {response.text}")
+    # Session selector
+    st.subheader("📋 Select Session to View")
     
-    except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
+    # Create session options with labels
+    session_options = {}
+    for session_id in all_sessions:
+        if session_id == st.session_state.current_session_id:
+            label = f"🔴 Current Session: {session_id[:8]}..."
+        else:
+            label = f"📝 Session: {session_id[:8]}..."
+        session_options[label] = session_id
+    
+    # Default to current session if available
+    default_session = None
+    if st.session_state.current_session_id:
+        for label, session_id in session_options.items():
+            if session_id == st.session_state.current_session_id:
+                default_session = label
+                break
+    
+    # Session selector
+    if session_options:
+        selected_session_label = st.selectbox(
+            "Choose a session:",
+            list(session_options.keys()),
+            index=list(session_options.keys()).index(default_session) if default_session else 0
+        )
+        
+        selected_session_id = session_options[selected_session_label]
+        
+        # Fetch and display conversation history
+        try:
+            response = requests.get(f"{API_BASE_URL}/conversation-history/{selected_session_id}", timeout=10)
+            
+            if response.status_code == 200:
+                result = response.json()
+                history = result['history']
+                
+                # Session info
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Session ID", f"{result['session_id'][:8]}...")
+                with col2:
+                    st.metric("Total Interactions", result['total_interactions'])
+                with col3:
+                    status = "🔴 Active" if selected_session_id == st.session_state.current_session_id else "📝 Archived"
+                    st.metric("Status", status)
+                
+                if history:
+                    st.subheader("💬 Conversation")
+                    
+                    # Display conversations in chronological order (most recent first)
+                    for i, interaction in enumerate(reversed(history), 1):
+                        with st.expander(f"Q{i}: {interaction['question'][:60]}..."):
+                            st.write(f"**Question:** {interaction['question']}")
+                            st.write(f"**Answer:** {interaction['answer']}")
+                            
+                            # Metrics
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**Confidence:** {interaction['confidence']:.3f}")
+                            with col2:
+                                st.write(f"**Time:** {interaction['timestamp'][:19]}")
+                else:
+                    st.info("📝 No interactions found in this session.")
+            
+            else:
+                st.error(f"❌ Error fetching session history: {response.text}")
+        
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
+    
+    # Session management buttons
+    st.divider()
+    st.subheader("🛠️ Session Management")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("🔄 Refresh Sessions"):
+            st.rerun()
+    
+    with col2:
+        if st.button("🗑️ Clear All History") and st.session_state.all_sessions:
+            if st.button("⚠️ Confirm Clear All", type="secondary"):
+                st.session_state.all_sessions = []
+                st.session_state.current_session_id = None
+                st.success("All session history cleared!")
+                st.rerun()
+    
+    with col3:
+        if st.session_state.current_session_id:
+            st.info(f"Current: {st.session_state.current_session_id[:8]}...")
+        else:
+            st.info("No active session")
 
 if __name__ == "__main__":
     main()
