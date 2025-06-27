@@ -443,7 +443,7 @@ def conversation_history():
     session_options = {}
     for session_id in all_sessions:
         if session_id == st.session_state.current_session_id:
-            label = f"🔴 Current Session: {session_id[:8]}..."
+            label = f"🟢 Current Session: {session_id[:8]}..."
         else:
             label = f"📝 Session: {session_id[:8]}..."
         session_options[label] = session_id
@@ -481,7 +481,7 @@ def conversation_history():
                 with col2:
                     st.metric("Total Interactions", result['total_interactions'])
                 with col3:
-                    status = "🔴 Active" if selected_session_id == st.session_state.current_session_id else "📝 Archived"
+                    status = "🟢 Active" if selected_session_id == st.session_state.current_session_id else "📝 Archived"
                     st.metric("Status", status)
                 
                 if history:
