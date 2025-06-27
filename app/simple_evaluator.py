@@ -15,17 +15,24 @@ class SimpleEvaluator:
     def __init__(self, rag_system, document_processor):
         self.rag_system = rag_system
         self.document_processor = document_processor
+        # Add randomization seed based on current time
+        self.question_seed = int(time.time() * 1000) % 10000
     
     async def generate_questions_from_document(self, doc_id: str, max_questions: int = None) -> List[Dict]:
-        """Generate questions from uploaded document - guaranteed minimum 5 questions"""
+        """Generate diverse questions from uploaded document - different each time"""
         questions_data = []
+        
+        # Update seed for different questions each time
+        self.question_seed = int(time.time() * 1000) % 10000
+        random.seed(self.question_seed)
+        
         try:
             chunks = self.document_processor.get_document_chunks(doc_id)
             if not chunks:
                 logger.warning(f"No chunks found for document {doc_id}")
                 return []
             
-            logger.info(f"Found {len(chunks)} chunks for document {doc_id}")
+            logger.info(f"Found {len(chunks)} chunks for document {doc_id} (seed: {self.question_seed})")
             
             # Ensure minimum 5 questions, respect max_questions from API
             if max_questions is None:
@@ -55,76 +62,118 @@ class SimpleEvaluator:
                 logger.error("No usable chunks found - all chunks too short")
                 return []
             
-            logger.info(f"Using {len(usable_chunks)} usable chunks")
+            # Shuffle chunks for variety each time
+            random.shuffle(usable_chunks)
+            logger.info(f"Using {len(usable_chunks)} usable chunks (shuffled)")
             
-            # Try multiple strategies to ensure we get at least 5 questions
+            # Try multiple strategies to ensure we get diverse questions
             generated_questions = set()
             
-            # Strategy 1: Simple template questions - try to get at least 3
-            for i, chunk in enumerate(usable_chunks[:max_questions]):
+            # Strategy 1: Diverse template questions - randomized selection
+            template_count = min(max_questions // 2 + 1, len(usable_chunks))
+            selected_chunks = random.sample(usable_chunks, min(template_count, len(usable_chunks)))
+            
+            for i, chunk in enumerate(selected_chunks):
                 if len(questions_data) >= max_questions:
                     break
                 
                 try:
-                    question_data = await self._generate_template_question(chunk, i)
+                    question_data = await self._generate_diverse_template_question(chunk, i)
                     if question_data and question_data['question'].lower() not in generated_questions:
                         questions_data.append(question_data)
                         generated_questions.add(question_data['question'].lower())
-                        logger.info(f"Generated template Q{len(questions_data)}: {question_data['question'][:50]}...")
+                        logger.info(f"Generated diverse Q{len(questions_data)}: {question_data['question'][:50]}...")
                 except Exception as e:
-                    logger.error(f"Error in template question {i}: {str(e)}")
+                    logger.error(f"Error in diverse template question {i}: {str(e)}")
                     continue
             
-            # Strategy 2: Basic questions - fill up to target
+            # Strategy 2: Contextual questions - different approach each time
             if len(questions_data) < max_questions:
-                logger.info(f"Need {max_questions - len(questions_data)} more questions, trying basic approach...")
-                for i, chunk in enumerate(usable_chunks):
+                remaining_needed = max_questions - len(questions_data)
+                logger.info(f"Need {remaining_needed} more questions, trying contextual approach...")
+                
+                # Use different chunks for contextual questions
+                remaining_chunks = [c for c in usable_chunks if c not in selected_chunks]
+                if remaining_chunks:
+                    contextual_chunks = random.sample(remaining_chunks, min(remaining_needed, len(remaining_chunks)))
+                    
+                    for i, chunk in enumerate(contextual_chunks):
+                        if len(questions_data) >= max_questions:
+                            break
+                        
+                        try:
+                            question_data = await self._generate_contextual_question(chunk, i)
+                            if question_data and question_data['question'].lower() not in generated_questions:
+                                questions_data.append(question_data)
+                                generated_questions.add(question_data['question'].lower())
+                                logger.info(f"Generated contextual Q{len(questions_data)}: {question_data['question'][:50]}...")
+                        except Exception as e:
+                            logger.error(f"Error in contextual question {i}: {str(e)}")
+                            continue
+            
+            # Strategy 3: Analytical questions - for variety
+            if len(questions_data) < max_questions:
+                remaining_needed = max_questions - len(questions_data)
+                logger.info(f"Need {remaining_needed} more questions, trying analytical approach...")
+                
+                for i in range(remaining_needed):
                     if len(questions_data) >= max_questions:
                         break
                     
                     try:
-                        question_data = await self._generate_basic_question(chunk, i)
+                        # Use random chunk for analytical questions
+                        chunk = random.choice(usable_chunks)
+                        question_data = await self._generate_analytical_question(chunk, i)
                         if question_data and question_data['question'].lower() not in generated_questions:
                             questions_data.append(question_data)
                             generated_questions.add(question_data['question'].lower())
-                            logger.info(f"Generated basic Q{len(questions_data)}: {question_data['question'][:50]}...")
+                            logger.info(f"Generated analytical Q{len(questions_data)}: {question_data['question'][:50]}...")
                     except Exception as e:
-                        logger.error(f"Error in basic question {i}: {str(e)}")
+                        logger.error(f"Error in analytical question {i}: {str(e)}")
                         continue
             
-            # Strategy 3: Guaranteed fallback - ensure minimum 5 questions
+            # Strategy 4: Guaranteed fallback with variety - ensure minimum 5 questions
             if len(questions_data) < 5:
-                logger.info(f"Only have {len(questions_data)} questions, using fallback to reach minimum 5...")
-                simple_questions = [
-                    "What is the main topic discussed?",
-                    "What information is provided in the document?",
-                    "What does the text describe?",
-                    "What are the key points mentioned?",
-                    "What is explained in the content?",
-                    "What details are covered?",
-                    "What concepts are presented?",
-                    "What facts are mentioned?"
+                logger.info(f"Only have {len(questions_data)} questions, using varied fallback to reach minimum 5...")
+                
+                # More diverse fallback questions
+                varied_questions = [
+                    "What is the main topic discussed in this document?",
+                    "What key information is provided?",
+                    "What important details are mentioned?",
+                    "What concepts are explained?",
+                    "What facts or data are presented?",
+                    "What processes or methods are described?",
+                    "What conclusions can be drawn?",
+                    "What examples are given?",
+                    "What problems or solutions are discussed?",
+                    "What recommendations are made?",
+                    "What benefits or advantages are mentioned?",
+                    "What challenges or issues are addressed?"
                 ]
                 
+                # Shuffle for variety
+                random.shuffle(varied_questions)
+                
                 needed = max(5 - len(questions_data), 0)
-                for i, simple_q in enumerate(simple_questions[:needed]):
-                    if simple_q.lower() not in generated_questions:
+                for i, varied_q in enumerate(varied_questions[:needed]):
+                    if varied_q.lower() not in generated_questions:
                         # Use different chunks for variety
                         chunk_index = i % len(usable_chunks)
                         chunk = usable_chunks[chunk_index]
                         context_text = chunk.get("text", "")[:300]
                         
                         questions_data.append({
-                            "question": simple_q,
-                            "expected_answer": f"Information from the document about {simple_q.lower().replace('?', '').replace('what ', '')}",
+                            "question": varied_q,
+                            "expected_answer": f"Based on the document content: {varied_q.lower().replace('?', '').replace('what ', '')}",
                             "context": context_text + "...",
-                            "question_type": "fallback",
+                            "question_type": "varied_fallback",
                             "chunk_index": chunk_index
                         })
-                        generated_questions.add(simple_q.lower())
-                        logger.info(f"Generated fallback Q{len(questions_data)}: {simple_q}")
+                        generated_questions.add(varied_q.lower())
+                        logger.info(f"Generated varied fallback Q{len(questions_data)}: {varied_q}")
             
-            logger.info(f"Successfully generated {len(questions_data)} questions from document {doc_id}")
+            logger.info(f"Successfully generated {len(questions_data)} diverse questions from document {doc_id}")
             
             # Final check - ensure we have at least 5 questions
             if len(questions_data) < 5:
@@ -136,78 +185,176 @@ class SimpleEvaluator:
             logger.error(f"Error in question generation: {str(e)}")
             return []
     
-    async def _generate_template_question(self, chunk: Dict, index: int) -> Dict:
-        """Generate question using simple templates"""
+    async def _generate_diverse_template_question(self, chunk: Dict, index: int) -> Dict:
+        """Generate question using diverse templates with randomization"""
         context_text = chunk.get("text", "").strip()
         
-        # Simple templates that usually work
-        templates = [
-            "What is mentioned about",
-            "What does the text say about", 
-            "What information is provided about",
-            "What is described regarding",
-            "What details are given about"
-        ]
+        # Expanded diverse templates
+        template_categories = {
+            "factual": [
+                "What specific information is provided about",
+                "What details are mentioned regarding",
+                "What facts are stated about",
+                "What data is given concerning"
+            ],
+            "analytical": [
+                "How does the text explain",
+                "What approach is described for",
+                "What method is outlined for",
+                "How is the concept of"
+            ],
+            "descriptive": [
+                "What characteristics are described for",
+                "What features are highlighted about",
+                "What aspects are covered regarding",
+                "What properties are mentioned for"
+            ],
+            "comparative": [
+                "What differences are noted about",
+                "What similarities are discussed regarding",
+                "How does the text compare",
+                "What contrasts are made concerning"
+            ]
+        }
         
-        template = templates[index % len(templates)]
+        # Randomly select category and template
+        category = random.choice(list(template_categories.keys()))
+        template = random.choice(template_categories[category])
         
         try:
-            # Very simple prompt
-            prompt = f"Complete this question based on the text: '{template} ___?'\n\nText: {context_text[:200]}\n\nComplete question:"
+            # More sophisticated prompt with variety
+            prompt = f"""Based on this text, complete the question using the template: "{template} ___?"
+
+Text: {context_text[:250]}
+
+Create a specific, relevant question that can be answered from the text. Complete the question:"""
             
             question = await self.rag_system._generate_with_gemini(prompt)
             question = self._clean_question(question)
             
             if not question or len(question) < 10:
-                # Fallback to generic question
-                question = f"{template} the main topic?"
+                # Fallback with category-specific question
+                fallback_questions = {
+                    "factual": f"{template} the main subject?",
+                    "analytical": f"{template} discussed in the text?",
+                    "descriptive": f"{template} the topic?",
+                    "comparative": f"{template} mentioned in the content?"
+                }
+                question = fallback_questions.get(category, f"{template} the main topic?")
             
-            # Generate simple answer
-            answer_prompt = f"Answer this question in 1-2 sentences based on the text:\n\nQuestion: {question}\nText: {context_text[:400]}\n\nAnswer:"
+            # Generate contextual answer
+            answer_prompt = f"""Answer this question in 2-3 sentences based on the text:
+
+Question: {question}
+Text: {context_text[:400]}
+
+Provide a clear, specific answer:"""
+            
             expected_answer = await self.rag_system._generate_with_gemini(answer_prompt)
             
             if not expected_answer:
-                expected_answer = "Information from the document"
+                expected_answer = f"Information from the document about {category} aspects"
             
             return {
                 "question": question,
                 "expected_answer": expected_answer.strip(),
                 "context": context_text[:200] + "...",
-                "question_type": "template",
+                "question_type": f"diverse_{category}",
                 "chunk_index": index
             }
             
         except Exception as e:
-            logger.error(f"Error in template question generation: {str(e)}")
+            logger.error(f"Error in diverse template question generation: {str(e)}")
             return None
     
-    async def _generate_basic_question(self, chunk: Dict, index: int) -> Dict:
-        """Generate very basic question"""
+    async def _generate_contextual_question(self, chunk: Dict, index: int) -> Dict:
+        """Generate contextual questions based on content analysis"""
         context_text = chunk.get("text", "").strip()
         
         try:
-            # Ultra-simple prompt
-            prompt = f"Create a simple question about this text:\n\n{context_text[:300]}\n\nQuestion:"
+            # Analyze content for better question generation
+            analysis_prompt = f"""Analyze this text and create a thoughtful question that requires understanding of the content:
+
+Text: {context_text[:300]}
+
+Generate a question that:
+1. Requires comprehension of the text
+2. Has a clear answer in the content
+3. Is specific and meaningful
+
+Question:"""
             
-            question = await self.rag_system._generate_with_gemini(prompt)
+            question = await self.rag_system._generate_with_gemini(analysis_prompt)
             question = self._clean_question(question)
             
             if not question:
-                question = "What is discussed in this text?"
+                # Contextual fallback
+                contextual_fallbacks = [
+                    "What is the significance of the information presented?",
+                    "What can be understood from this content?",
+                    "What important point is being made?",
+                    "What is the purpose of this information?",
+                    "What insight does this text provide?"
+                ]
+                question = random.choice(contextual_fallbacks)
             
-            # Simple answer
-            expected_answer = context_text[:100] + "..." if len(context_text) > 100 else context_text
+            # Generate comprehensive answer
+            expected_answer = context_text[:150] + "..." if len(context_text) > 150 else context_text
             
             return {
                 "question": question,
                 "expected_answer": expected_answer,
                 "context": context_text[:200] + "...",
-                "question_type": "basic",
+                "question_type": "contextual",
                 "chunk_index": index
             }
             
         except Exception as e:
-            logger.error(f"Error in basic question generation: {str(e)}")
+            logger.error(f"Error in contextual question generation: {str(e)}")
+            return None
+    
+    async def _generate_analytical_question(self, chunk: Dict, index: int) -> Dict:
+        """Generate analytical questions for deeper understanding"""
+        context_text = chunk.get("text", "").strip()
+        
+        try:
+            # Analytical question types
+            analytical_types = [
+                "Why is this information important?",
+                "What does this suggest about the topic?",
+                "How does this relate to the main theme?",
+                "What implications can be drawn?",
+                "What is the underlying meaning?",
+                "What purpose does this serve?",
+                "What can be inferred from this?",
+                "What is the significance of this content?"
+            ]
+            
+            question = random.choice(analytical_types)
+            
+            # Generate analytical answer
+            answer_prompt = f"""Provide an analytical answer to this question based on the text:
+
+Question: {question}
+Text: {context_text[:400]}
+
+Give a thoughtful, analytical response:"""
+            
+            expected_answer = await self.rag_system._generate_with_gemini(answer_prompt)
+            
+            if not expected_answer:
+                expected_answer = "This content provides important insights that contribute to understanding the overall topic and its implications."
+            
+            return {
+                "question": question,
+                "expected_answer": expected_answer.strip(),
+                "context": context_text[:200] + "...",
+                "question_type": "analytical",
+                "chunk_index": index
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in analytical question generation: {str(e)}")
             return None
     
     def _clean_question(self, question: str) -> str:
@@ -224,7 +371,8 @@ class SimpleEvaluator:
             "the question is:", "question -", "q -", "here is a question:",
             "a good question would be:", "the question could be:",
             "question about the text:", "text question:", "complete question:",
-            "completed question:", "answer:"
+            "completed question:", "answer:", "generate a question:",
+            "create a question:", "thoughtful question:"
         ]
         
         question_lower = question.lower()
