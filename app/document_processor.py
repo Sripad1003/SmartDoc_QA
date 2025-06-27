@@ -1,19 +1,12 @@
-import asyncio
-import hashlib
-import uuid
+#asynchronous processing document reading, text cleaning, logging.
+import uuid,logging,io
 from typing import List, Dict, Any
 from datetime import datetime
-import logging
-import io
 
 # Document processing libraries
-import PyPDF2
-import docx
-from bs4 import BeautifulSoup
-import markdown
-import nltk
-from nltk.tokenize import sent_tokenize, word_tokenize
-import re
+import PyPDF2,docx,markdown,nltk,re # type: ignore
+from bs4 import BeautifulSoup # type: ignore
+from nltk.tokenize import sent_tokenize # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +27,7 @@ class DocumentProcessor:
     
     async def process_document(self, content: bytes, filename: str, content_type: str) -> str:
         """Process document and return document ID"""
-        doc_id = str(uuid.uuid4())
+        doc_id = str(uuid.uuid4())#generates a id
         
         try:
             # Extract text based on file type
@@ -125,7 +118,11 @@ class DocumentProcessor:
         
         # Semantic chunking based on paragraphs
         paragraphs = text.split('\n\n')
-        
+        if len(paragraphs) == 1:
+            # Fallback: break into pseudo-paragraphs (every 5 sentences)
+            sentences = self._safe_sentence_tokenize(text)
+            paragraphs = [' '.join(sentences[i:i+5]) for i in range(0, len(sentences), 5)]
+            
         current_chunk = ""
         chunk_size = 1000  # Target chunk size
         overlap_size = 200  # Overlap between chunks

@@ -1,14 +1,9 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import uvicorn
 from typing import List, Optional
-import asyncio
 from datetime import datetime
-import logging
-import uuid
-import time
+import logging,uuid,time,uvicorn,random
 
 # Import our modules - FIXED IMPORTS
 from .document_processor import DocumentProcessor
@@ -18,8 +13,7 @@ from .simple_evaluator import SimpleEvaluator
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, Config.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
@@ -38,7 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic models
+# question endpoint — validates incoming JSON.
 class QuestionRequest(BaseModel):
     question: str
     session_id: Optional[str] = None
@@ -55,7 +49,6 @@ sessions = {}
 async def startup_event():
     """Startup event"""
     logger.info("🚀 Starting Simple Document Q&A System")
-    logger.info(f"Environment: {Config.ENVIRONMENT}")
 
 @app.get("/")
 async def root():
@@ -171,7 +164,7 @@ async def list_documents():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/generate-questions/{doc_id}")
-async def generate_questions(doc_id: str, max_questions: int = 5):
+async def generate_questions(doc_id: str, max_questions: int = random.randint(5, 8)):
     """Generate questions from a document"""
     try:
         if doc_id not in doc_processor.processed_documents:
@@ -312,5 +305,4 @@ if __name__ == "__main__":
         "app.main:app",
         host=Config.HOST,
         port=Config.PORT,
-        log_level=Config.LOG_LEVEL.lower()
     )

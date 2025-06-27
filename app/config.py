@@ -1,13 +1,10 @@
 import os
-from typing import Optional
 
 class Config:
     """Configuration settings for the Q&A system"""
     
     # Environment
-    ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
-    DEBUG = os.getenv("DEBUG", "false").lower() == "true"
-    
+    ENVIRONMENT = os.getenv("ENVIRONMENT", "development")    
     # Gemini API Configuration
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "AIzaSyDv5zVdk7kaPnHrcSUiyZi1lkZggVgm7ZA")
     
@@ -23,7 +20,7 @@ class Config:
     
     # Answer Generation Settings
     MAX_ANSWER_LENGTH = int(os.getenv("MAX_ANSWER_LENGTH", "2000"))  # New setting
-    MIN_CONFIDENCE_THRESHOLD = float(os.getenv("MIN_CONFIDENCE_THRESHOLD", "0.3"))
+    MIN_CONFIDENCE_THRESHOLD = float(os.getenv("MIN_CONFIDENCE_THRESHOLD", "0.4"))
     
     # Cache Configuration
     ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
@@ -35,10 +32,7 @@ class Config:
     
     # Security
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
-    MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", "50")) * 1024 * 1024  # 50MB
-    
-    # Logging
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", "10")) * 1024 * 1024  # 50MB
     
     @classmethod
     def validate(cls) -> bool:
@@ -48,8 +42,3 @@ class Config:
             print("   Please set your Gemini API key in the .env file")
             return False
         return True
-    
-    @classmethod
-    def is_production(cls) -> bool:
-        """Check if running in production"""
-        return cls.ENVIRONMENT.lower() == "production"

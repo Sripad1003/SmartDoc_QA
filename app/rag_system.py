@@ -1,13 +1,9 @@
-import asyncio
+import asyncio,logging,re
 import numpy as np
-from typing import List, Dict, Any, Optional
-import logging
-from datetime import datetime
-import json
-import re
+from typing import List, Dict, Any
 
 # Gemini API
-import google.generativeai as genai
+import google.generativeai as genai # type: ignore
 
 from .config import Config
 
@@ -111,16 +107,16 @@ class RAGSystem:
     async def _fallback_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Enhanced fallback embedding generation"""
         try:
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.decomposition import TruncatedSVD
+            from sklearn.feature_extraction.text import TfidfVectorizer # type: ignore
+            from sklearn.decomposition import TruncatedSVD# type: ignore
             
             # Use TF-IDF with better parameters
             vectorizer = TfidfVectorizer(
                 max_features=1000,
                 stop_words='english',
-                ngram_range=(1, 2),  # Include bigrams
-                min_df=1,
-                max_df=0.95
+                ngram_range=(1, 2),  # Include bigrams, uigrams
+                min_df=1, #freq
+                max_df=0.90
             )
             
             vectors = vectorizer.fit_transform(texts)
@@ -339,26 +335,26 @@ class RAGSystem:
         """Create enhanced prompt for better answer generation"""
         prompt = f"""You are an expert document analysis assistant. Your task is to provide comprehensive, accurate answers based on the provided document context.
 
-CONVERSATION HISTORY:
-{conversation_context}
+        CONVERSATION HISTORY:
+        {conversation_context}
 
-DOCUMENT CONTEXT:
-{context}
+        DOCUMENT CONTEXT:
+        {context}
 
-QUESTION: {question}
+        QUESTION: {question}
 
-INSTRUCTIONS:
-1. Provide a detailed, comprehensive answer based PRIMARILY on the document context
-2. If the context contains relevant information, elaborate and explain thoroughly
-3. Structure your answer with clear sections if the topic is complex
-4. Include specific details, examples, and explanations from the documents
-5. If information is incomplete, clearly state what is missing
-6. If the answer requires information not in the context, clearly state this limitation
-7. Use bullet points or numbered lists when appropriate for clarity
-8. Aim for a thorough response (200-800 words depending on complexity)
-9. Cite specific sections when referencing document content
+        INSTRUCTIONS:
+        1. Provide a detailed, comprehensive answer based PRIMARILY on the document context
+        2. If the context contains relevant information, elaborate and explain thoroughly
+        3. Structure your answer with clear sections if the topic is complex
+        4. Include specific details, examples, and explanations from the documents
+        5. If information is incomplete, clearly state what is missing
+        6. If the answer requires information not in the context, clearly state this limitation
+        7. Use bullet points or numbered lists when appropriate for clarity
+        8. Aim for a thorough response (200-800 words depending on complexity)
+        9. Cite specific sections when referencing document content
 
-ANSWER:"""
+        ANSWER:"""
         
         return prompt
     
