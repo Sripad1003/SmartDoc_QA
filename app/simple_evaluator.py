@@ -7,6 +7,7 @@ import logging
 import re
 import string
 from collections import Counter
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class SimpleEvaluator:
         self.document_processor = document_processor
     
     async def generate_questions_from_document(self, doc_id: str, max_questions: int = None) -> List[Dict]:
-        """Generate questions from uploaded document"""
+        """Generate questions from uploaded document - guaranteed minimum 5 questions"""
         questions_data = []
         try:
             chunks = self.document_processor.get_document_chunks(doc_id)
@@ -26,7 +27,7 @@ class SimpleEvaluator:
             
             logger.info(f"Found {len(chunks)} chunks for document {doc_id}")
             
-            # Simple logic: Default 5, scale up for larger documents
+            # Ensure minimum 5 questions, respect max_questions from API
             if max_questions is None:
                 if len(chunks) >= 25:
                     max_questions = 8
@@ -37,24 +38,29 @@ class SimpleEvaluator:
                 else:
                     max_questions = 5
             
-            logger.info(f"Target: {max_questions} questions from {len(chunks)} chunks")
+            # Ensure minimum of 5 questions
+            if max_questions < 5:
+                max_questions = 5
             
-            # Use chunks with reasonable content
+            logger.info(f"Target: {max_questions} questions (minimum 5) from {len(chunks)} chunks")
+            
+            # Use ALL chunks, even small ones
             usable_chunks = []
             for chunk in chunks:
                 text = chunk.get("text", "").strip()
-                if len(text) >= 20:
+                if len(text) >= 20:  # Very low threshold
                     usable_chunks.append(chunk)
             
             if not usable_chunks:
-                logger.error("No usable chunks found")
+                logger.error("No usable chunks found - all chunks too short")
                 return []
             
             logger.info(f"Using {len(usable_chunks)} usable chunks")
             
+            # Try multiple strategies to ensure we get at least 5 questions
             generated_questions = set()
             
-            # Strategy 1: Template questions
+            # Strategy 1: Simple template questions - try to get at least 3
             for i, chunk in enumerate(usable_chunks[:max_questions]):
                 if len(questions_data) >= max_questions:
                     break
@@ -64,14 +70,14 @@ class SimpleEvaluator:
                     if question_data and question_data['question'].lower() not in generated_questions:
                         questions_data.append(question_data)
                         generated_questions.add(question_data['question'].lower())
-                        logger.info(f"Generated Q{len(questions_data)}: {question_data['question'][:50]}...")
+                        logger.info(f"Generated template Q{len(questions_data)}: {question_data['question'][:50]}...")
                 except Exception as e:
                     logger.error(f"Error in template question {i}: {str(e)}")
                     continue
             
-            # Strategy 2: Basic questions if needed
-            if len(questions_data) < 3:
-                logger.info("Not enough questions, trying basic approach...")
+            # Strategy 2: Basic questions - fill up to target
+            if len(questions_data) < max_questions:
+                logger.info(f"Need {max_questions - len(questions_data)} more questions, trying basic approach...")
                 for i, chunk in enumerate(usable_chunks):
                     if len(questions_data) >= max_questions:
                         break
@@ -86,36 +92,44 @@ class SimpleEvaluator:
                         logger.error(f"Error in basic question {i}: {str(e)}")
                         continue
             
-            # Strategy 3: Simple fallback questions
-            if len(questions_data) < 2:
-                logger.info("Using fallback questions...")
+            # Strategy 3: Guaranteed fallback - ensure minimum 5 questions
+            if len(questions_data) < 5:
+                logger.info(f"Only have {len(questions_data)} questions, using fallback to reach minimum 5...")
                 simple_questions = [
                     "What is the main topic discussed?",
                     "What information is provided in the document?",
                     "What does the text describe?",
                     "What are the key points mentioned?",
-                    "What is explained in the content?"
+                    "What is explained in the content?",
+                    "What details are covered?",
+                    "What concepts are presented?",
+                    "What facts are mentioned?"
                 ]
                 
-                for i, simple_q in enumerate(simple_questions[:max_questions]):
-                    if len(questions_data) >= max_questions:
-                        break
-                    
+                needed = max(5 - len(questions_data), 0)
+                for i, simple_q in enumerate(simple_questions[:needed]):
                     if simple_q.lower() not in generated_questions:
-                        chunk = usable_chunks[0] if usable_chunks else chunks[0]
+                        # Use different chunks for variety
+                        chunk_index = i % len(usable_chunks)
+                        chunk = usable_chunks[chunk_index]
                         context_text = chunk.get("text", "")[:300]
                         
                         questions_data.append({
                             "question": simple_q,
                             "expected_answer": f"Information from the document about {simple_q.lower().replace('?', '').replace('what ', '')}",
                             "context": context_text + "...",
-                            "question_type": "simple",
-                            "chunk_index": i
+                            "question_type": "fallback",
+                            "chunk_index": chunk_index
                         })
                         generated_questions.add(simple_q.lower())
-                        logger.info(f"Generated simple Q{len(questions_data)}: {simple_q}")
+                        logger.info(f"Generated fallback Q{len(questions_data)}: {simple_q}")
             
             logger.info(f"Successfully generated {len(questions_data)} questions from document {doc_id}")
+            
+            # Final check - ensure we have at least 5 questions
+            if len(questions_data) < 5:
+                logger.warning(f"Only generated {len(questions_data)} questions, expected minimum 5")
+            
             return questions_data
             
         except Exception as e:
@@ -126,6 +140,7 @@ class SimpleEvaluator:
         """Generate question using simple templates"""
         context_text = chunk.get("text", "").strip()
         
+        # Simple templates that usually work
         templates = [
             "What is mentioned about",
             "What does the text say about", 
@@ -137,14 +152,17 @@ class SimpleEvaluator:
         template = templates[index % len(templates)]
         
         try:
+            # Very simple prompt
             prompt = f"Complete this question based on the text: '{template} ___?'\n\nText: {context_text[:200]}\n\nComplete question:"
             
             question = await self.rag_system._generate_with_gemini(prompt)
             question = self._clean_question(question)
             
             if not question or len(question) < 10:
+                # Fallback to generic question
                 question = f"{template} the main topic?"
             
+            # Generate simple answer
             answer_prompt = f"Answer this question in 1-2 sentences based on the text:\n\nQuestion: {question}\nText: {context_text[:400]}\n\nAnswer:"
             expected_answer = await self.rag_system._generate_with_gemini(answer_prompt)
             
@@ -168,6 +186,7 @@ class SimpleEvaluator:
         context_text = chunk.get("text", "").strip()
         
         try:
+            # Ultra-simple prompt
             prompt = f"Create a simple question about this text:\n\n{context_text[:300]}\n\nQuestion:"
             
             question = await self.rag_system._generate_with_gemini(prompt)
@@ -176,6 +195,7 @@ class SimpleEvaluator:
             if not question:
                 question = "What is discussed in this text?"
             
+            # Simple answer
             expected_answer = context_text[:100] + "..." if len(context_text) > 100 else context_text
             
             return {
@@ -191,12 +211,13 @@ class SimpleEvaluator:
             return None
     
     def _clean_question(self, question: str) -> str:
-        """Clean and format the question"""
+        """Clean and format the question - more robust"""
         if not question:
             return ""
         
         question = question.strip()
         
+        # Remove common prefixes - more comprehensive
         prefixes_to_remove = [
             "question:", "q:", "here's a question:", "based on the text:",
             "from the text:", "a question could be:", "one question is:",
@@ -212,14 +233,18 @@ class SimpleEvaluator:
                 question = question[len(prefix):].strip()
                 break
         
+        # Remove quotes and extra characters
         question = question.strip('"\'`')
         
+        # Ensure it ends with a question mark
         if question and not question.endswith('?'):
             question += '?'
         
+        # Capitalize first letter
         if question:
             question = question[0].upper() + question[1:]
         
+        # Basic validation - be more lenient
         if len(question) < 5 or len(question) > 300:
             return ""
         
@@ -227,28 +252,33 @@ class SimpleEvaluator:
     
     def _calculate_improved_f1_score(self, predicted: str, expected: str) -> float:
         """Improved F1 score calculation"""
+        # If expected answer is found in predicted answer, give high score
         expected_clean = self._normalize_answer(expected)
         predicted_clean = self._normalize_answer(predicted)
         
+        # Direct containment check
         if expected_clean in predicted_clean:
-            return 0.85
+            return 0.85  # High score for containing the answer
         
+        # Check word overlap
         expected_words = set(expected_clean.split())
         predicted_words = set(predicted_clean.split())
         
         if not expected_words:
             return 1.0 if not predicted_words else 0.0
         
+        # Calculate overlap ratio
         overlap = len(expected_words & predicted_words)
         overlap_ratio = overlap / len(expected_words)
         
-        if overlap_ratio >= 0.8:
+        if overlap_ratio >= 0.8:  # 80% of expected words found
             return 0.8
-        elif overlap_ratio >= 0.6:
+        elif overlap_ratio >= 0.6:  # 60% of expected words found
             return 0.6
-        elif overlap_ratio >= 0.4:
+        elif overlap_ratio >= 0.4:  # 40% of expected words found
             return 0.4
         else:
+            # Fall back to standard F1
             return self._calculate_token_f1(predicted, expected)
     
     def _calculate_token_f1(self, predicted: str, expected: str) -> float:
@@ -262,6 +292,7 @@ class SimpleEvaluator:
         if not predicted_tokens:
             return 0.0
         
+        # Calculate token overlap
         common_tokens = Counter(predicted_tokens) & Counter(expected_tokens)
         num_common = sum(common_tokens.values())
         
@@ -279,9 +310,11 @@ class SimpleEvaluator:
         pred_words = set(self._tokenize(predicted.lower()))
         exp_words = set(self._tokenize(expected.lower()))
         
+        # Check if all expected words are in predicted
         if exp_words.issubset(pred_words):
             return 1.0
         
+        # Calculate Jaccard similarity
         intersection = len(pred_words & exp_words)
         union = len(pred_words | exp_words)
         
@@ -292,15 +325,17 @@ class SimpleEvaluator:
         pred_clean = self._normalize_answer(predicted)
         exp_clean = self._normalize_answer(expected)
         
+        # Direct containment
         if exp_clean in pred_clean:
             return True
         
+        # Check if most words from expected are in predicted
         exp_words = set(exp_clean.split())
         pred_words = set(pred_clean.split())
         
         if len(exp_words) > 0:
             overlap_ratio = len(exp_words & pred_words) / len(exp_words)
-            return overlap_ratio >= 0.6
+            return overlap_ratio >= 0.6  # 60% of expected words found
         
         return False
 
@@ -325,18 +360,22 @@ class SimpleEvaluator:
                 expected_answer = item["expected_answer"]
                 question_type = item.get("question_type", "general")
                 
+                # Track question types
                 if question_type not in results["question_types"]:
                     results["question_types"][question_type] = 0
                 results["question_types"][question_type] += 1
                 
+                # Measure response time
                 start_time = time.time()
                 
+                # Get prediction from our system
                 answer_data = await self.rag_system.generate_answer(question)
                 predicted_answer = answer_data["answer"]
                 
                 response_time = time.time() - start_time
                 results["response_times"].append(response_time)
                 
+                # Calculate multiple metrics with improved F1
                 f1_score = self._calculate_improved_f1_score(predicted_answer, expected_answer)
                 semantic_score = self._calculate_semantic_similarity(predicted_answer, expected_answer)
                 contains_answer = self._calculate_contains_answer(predicted_answer, expected_answer)
@@ -368,6 +407,7 @@ class SimpleEvaluator:
                     "question": item.get("question", "Unknown")
                 })
         
+        # Calculate final metrics
         results["average_f1"] = statistics.mean(results["f1_scores"]) if results["f1_scores"] else 0
         results["average_semantic"] = statistics.mean(results["semantic_scores"]) if results["semantic_scores"] else 0
         results["accuracy_rate"] = sum(results["contains_answer"]) / len(results["contains_answer"]) if results["contains_answer"] else 0
@@ -375,6 +415,7 @@ class SimpleEvaluator:
         results["evaluation_timestamp"] = datetime.now().isoformat()
         
         logger.info(f"Evaluation completed: F1={results['average_f1']:.3f}, Semantic={results['average_semantic']:.3f}, Accuracy={results['accuracy_rate']:.3f}")
+        logger.info(f"Question types generated: {results['question_types']}")
         
         return results
     
@@ -394,6 +435,7 @@ class SimpleEvaluator:
     async def run_simple_evaluation(self, doc_id: str) -> Dict[str, Any]:
         """Run complete simple evaluation"""
         try:
+            # Generate questions from document
             logger.info(f"Generating questions from document: {doc_id}")
             questions_data = await self.generate_questions_from_document(doc_id)
             
@@ -403,9 +445,11 @@ class SimpleEvaluator:
                     "doc_id": doc_id
                 }
             
+            # Evaluate with F1 scores
             logger.info("Running F1 evaluation...")
             evaluation_results = await self.evaluate_with_f1(questions_data)
             
+            # Add document info
             evaluation_results["doc_id"] = doc_id
             evaluation_results["questions_generated"] = len(questions_data)
             

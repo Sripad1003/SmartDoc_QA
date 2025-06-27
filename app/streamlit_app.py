@@ -134,32 +134,34 @@ def upload_and_qa():
     # Q&A Section
     st.subheader("❓ Ask Questions")
     
-    # Initialize session state
+    # Initialize session state for session management
     if 'current_session_id' not in st.session_state:
         st.session_state.current_session_id = None
     if 'all_sessions' not in st.session_state:
         st.session_state.all_sessions = []
     
-    # Current session info
-    if st.session_state.current_session_id:
-        st.info(f"🔗 Current Session: {st.session_state.current_session_id[:8]}...")
+    # Session management
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if st.session_state.current_session_id:
+            st.info(f"🔗 Current Session: {st.session_state.current_session_id[:8]}...")
+        else:
+            st.info("🆕 No active session")
+    
+    with col2:
+        if st.button("🔄 New Session"):
+            # Save current session to history before creating new one
+            if st.session_state.current_session_id and st.session_state.current_session_id not in st.session_state.all_sessions:
+                st.session_state.all_sessions.append(st.session_state.current_session_id)
+            
+            # Clear current session
+            st.session_state.current_session_id = None
+            st.success("New session will be created with your next question!")
     
     # Question input
     question = st.text_input("Enter your question:")
     
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        ask_button = st.button("🎯 Ask Question", type="primary", disabled=not question)
-    with col2:
-        if st.button("🔄 New Session"):
-            # Save current session to history
-            if st.session_state.current_session_id and st.session_state.current_session_id not in st.session_state.all_sessions:
-                st.session_state.all_sessions.append(st.session_state.current_session_id)
-            
-            st.session_state.current_session_id = None
-            st.success("New session will be created with your next question!")
-    
-    if ask_button and question:
+    if st.button("🎯 Ask Question", type="primary", disabled=not question):
         with st.spinner("Generating answer..."):
             try:
                 payload = {
@@ -176,7 +178,7 @@ def upload_and_qa():
                 if response.status_code == 200:
                     result = response.json()
                     
-                    # Update session ID
+                    # Update current session ID
                     st.session_state.current_session_id = result['session_id']
                     
                     # Add to all sessions if not already there
@@ -276,6 +278,10 @@ def generate_questions(doc_id: str):
                     # Fallback to simple list
                     for i, question in enumerate(result.get('questions', []), 1):
                         st.write(f"{i}. {question}")
+                
+                # Store in session state for evaluation
+                st.session_state.generated_questions = questions_data
+                st.session_state.source_doc_id = doc_id
             
             else:
                 st.error(f"❌ Error: {response.text}")
@@ -405,7 +411,7 @@ def run_evaluation(doc_id: str):
             st.error(f"❌ Error: {str(e)}")
 
 def conversation_history():
-    """Show conversation history"""
+    """Show conversation history with improved session management"""
     st.header("💬 Conversation History")
     
     # Initialize session state if not exists
