@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Simple Document Q&A System",
+    title="Smart Document Q&A System",
     version="1.0.0",
     description="Clean document Q&A system with F1 evaluation"
 )
