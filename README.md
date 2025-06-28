@@ -150,12 +150,6 @@ MAX_ANSWER_LENGTH=2000       # Longer, in-depth responses
 | Response Time  | < 5s per query     |
 | Error Rate     | < 1%               |
 
-**To Run:**
-```bash
-python scripts/run_evaluation.py        # Full SQUAD evaluation
-python scripts/quick_evaluation.py      # Quick test
-```
-
 ---
 
 ## 🛠️ Troubleshooting
