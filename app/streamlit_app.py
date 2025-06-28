@@ -1,512 +1,640 @@
 import streamlit as st
-import requests
-import json
-from datetime import datetime
+import asyncio
+import logging
 import time
+from datetime import datetime
+import json
+import plotly.express as px
+import plotly.graph_objects as go
+import pandas as pd
+from typing import Dict, List, Any
 
-# Configure Streamlit page
-st.set_page_config(
-    page_title="Simple Document Q&A System",
-    page_icon="🤖",
-    layout="wide"
-)
+# Import our modules
+from .main import QASystem
+from .simple_evaluator import SimpleEvaluator
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # API base URL
 API_BASE_URL = "http://127.0.0.1:8000"
 
-def check_backend():
-    """Check if backend is running"""
-    try:
-        response = requests.get(f"{API_BASE_URL}/health", timeout=3)
-        return response.status_code == 200, response.json() if response.status_code == 200 else None
-    except:
-        return False, None
+# Configure Streamlit page
+st.set_page_config(
+    page_title="Intelligent Q&A System",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-def main():
-    st.title("🤖 Simple Document Q&A System")
-    st.markdown("**Clean & Simple** - Upload documents, generate questions, and evaluate with F1 scores!")
-    
-    # Check backend connection
-    is_connected, health_data = check_backend()
-    
-    if not is_connected:
-        st.error("❌ Backend not connected. Please start the backend first:")
-        st.code("python start.py")
-        st.stop()
-    
-    # Show status
-    st.success("✅ Backend connected")
-    
-    if health_data:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Documents", health_data.get('documents_processed', 0))
-        with col2:
-            st.metric("Chunks", health_data.get('chunks_indexed', 0))
-    
-    # Main interface with three tabs
-    tab1, tab2, tab3 = st.tabs([
-        "📄 Upload & Q&A", 
-        "🎯 Evaluation", 
-        "💬 History"
-    ])
-    
-    with tab1:
-        upload_and_qa()
-    
-    with tab2:
-        evaluation_tab()
-    
-    with tab3:
-        conversation_history()
+# Custom CSS for better styling
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #1f77b4;
+    }
+    .success-message {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 0.75rem;
+        border-radius: 0.25rem;
+        border: 1px solid #c3e6cb;
+    }
+    .error-message {
+        background-color: #f8d7da;
+        color: #721c24;
+        padding: 0.75rem;
+        border-radius: 0.25rem;
+        border: 1px solid #f5c6cb;
+    }
+    .session-indicator {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 8px;
+    }
+    .session-active {
+        background-color: #28a745;
+    }
+    .session-inactive {
+        background-color: #6c757d;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-def upload_and_qa():
-    """Upload documents and ask questions"""
-    st.header("📄 Document Upload & Question Answering")
+def initialize_session_state():
+    """Initialize session state variables"""
+    if 'qa_system' not in st.session_state:
+        st.session_state.qa_system = QASystem()
     
-    # Show current documents
-    st.subheader("📚 Your Documents")
+    if 'simple_evaluator' not in st.session_state:
+        st.session_state.simple_evaluator = SimpleEvaluator(
+            st.session_state.qa_system.rag_system,
+            st.session_state.qa_system.document_processor
+        )
+    
+    if 'uploaded_documents' not in st.session_state:
+        st.session_state.uploaded_documents = {}
+    
+    if 'evaluation_results' not in st.session_state:
+        st.session_state.evaluation_results = {}
+    
+    # Session management
+    if 'current_session_id' not in st.session_state:
+        st.session_state.current_session_id = f"session_{int(time.time())}"
+    
+    if 'all_sessions' not in st.session_state:
+        st.session_state.all_sessions = {}
+    
+    # Initialize current session if not exists
+    if st.session_state.current_session_id not in st.session_state.all_sessions:
+        st.session_state.all_sessions[st.session_state.current_session_id] = {
+            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'conversation_history': [],
+            'name': f"Session {len(st.session_state.all_sessions) + 1}"
+        }
+
+def create_new_session():
+    """Create a new conversation session"""
+    new_session_id = f"session_{int(time.time())}"
+    st.session_state.current_session_id = new_session_id
+    st.session_state.all_sessions[new_session_id] = {
+        'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'conversation_history': [],
+        'name': f"Session {len(st.session_state.all_sessions) + 1}"
+    }
+    st.rerun()
+
+def get_current_conversation():
+    """Get current session's conversation history"""
+    return st.session_state.all_sessions[st.session_state.current_session_id]['conversation_history']
+
+def add_to_conversation(question: str, answer: str, confidence: float = 0.0):
+    """Add Q&A to current session's conversation history"""
+    conversation = get_current_conversation()
+    conversation.append({
+        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'question': question,
+        'answer': answer,
+        'confidence': confidence
+    })
+
+async def process_question(question: str) -> Dict[str, Any]:
+    """Process a question using the QA system"""
     try:
-        response = requests.get(f"{API_BASE_URL}/list-documents", timeout=10)
-        if response.status_code == 200:
-            doc_list = response.json()
-            documents = doc_list.get('documents', [])
-            
-            if documents:
-                for doc in documents:
-                    with st.expander(f"📄 {doc['filename']} ({doc['chunk_count']} chunks)"):
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.write(f"**Doc ID:** {doc['doc_id']}")
-                        with col2:
-                            st.write(f"**Text Length:** {doc['text_length']}")
-                        with col3:
-                            st.write(f"**Processed:** {doc['processed_at']}")
-            else:
-                st.info("No documents uploaded yet.")
-        else:
-            st.error("Could not fetch documents")
+        conversation_history = get_current_conversation()
+        result = await st.session_state.qa_system.ask_question(question, conversation_history)
+        
+        # Add to conversation history
+        add_to_conversation(question, result['answer'], result.get('confidence', 0.0))
+        
+        return result
     except Exception as e:
-        st.error(f"Error: {str(e)}")
+        logger.error(f"Error processing question: {str(e)}")
+        return {
+            'answer': f"I encountered an error while processing your question: {str(e)}",
+            'confidence': 0.0,
+            'sources': [],
+            'error': str(e)
+        }
+
+def render_sidebar():
+    """Render the sidebar with navigation and session management"""
+    with st.sidebar:
+        st.markdown("### 🤖 Navigation")
+        
+        # Session Management
+        st.markdown("### 💬 Session Management")
+        
+        # Current session indicator
+        current_session = st.session_state.all_sessions[st.session_state.current_session_id]
+        st.markdown(f"""
+        <div style="margin-bottom: 1rem;">
+            <span class="session-indicator session-active"></span>
+            <strong>Current:</strong> {current_session['name']}<br>
+            <small>Created: {current_session['created_at']}</small>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # New session button
+        if st.button("🆕 New Session", use_container_width=True):
+            create_new_session()
+        
+        # Session selector
+        if len(st.session_state.all_sessions) > 1:
+            st.markdown("**Switch Session:**")
+            session_options = {}
+            for session_id, session_data in st.session_state.all_sessions.items():
+                is_current = session_id == st.session_state.current_session_id
+                indicator = "🟢" if is_current else "⚪"
+                session_options[f"{indicator} {session_data['name']}"] = session_id
+            
+            selected_session_name = st.selectbox(
+                "Select session:",
+                options=list(session_options.keys()),
+                index=list(session_options.values()).index(st.session_state.current_session_id),
+                label_visibility="collapsed"
+            )
+            
+            selected_session_id = session_options[selected_session_name]
+            if selected_session_id != st.session_state.current_session_id:
+                st.session_state.current_session_id = selected_session_id
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # Navigation
+        page = st.radio(
+            "Choose a page:",
+            ["📄 Document Upload", "❓ Ask Questions", "📊 Evaluation", "📈 History"],
+            index=0
+        )
+        
+        # System status
+        st.markdown("### 📊 System Status")
+        
+        # Document count
+        doc_count = len(st.session_state.uploaded_documents)
+        st.metric("📚 Documents", doc_count)
+        
+        # Current session stats
+        conversation_count = len(get_current_conversation())
+        st.metric("💬 Questions (Current)", conversation_count)
+        
+        # Total conversations across all sessions
+        total_conversations = sum(len(session['conversation_history']) for session in st.session_state.all_sessions.values())
+        st.metric("💬 Total Questions", total_conversations)
+        
+        return page
+
+def render_document_upload():
+    """Render document upload page"""
+    st.markdown('<h1 class="main-header">📄 Document Upload</h1>', unsafe_allow_html=True)
     
-    st.divider()
+    st.markdown("""
+    Upload your documents to build the knowledge base for the Q&A system.
+    Supported formats: PDF, TXT, DOCX
+    """)
     
-    # Document upload
-    st.subheader("📁 Upload New Documents")
+    # File uploader
     uploaded_files = st.file_uploader(
         "Choose files to upload",
+        type=['pdf', 'txt', 'docx'],
         accept_multiple_files=True,
-        type=['pdf', 'docx', 'txt', 'html', 'md'],
-        help="Supported formats: PDF, Word, Text, HTML, Markdown"
+        help="Upload PDF, TXT, or DOCX files"
     )
     
     if uploaded_files:
-        if st.button("🚀 Upload & Process", type="primary"):
-            with st.spinner("Processing documents..."):
-                files_data = []
-                for file in uploaded_files:
-                    files_data.append(("files", (file.name, file.getvalue(), file.type)))
-                
-                try:
-                    response = requests.post(f"{API_BASE_URL}/upload-documents", files=files_data, timeout=120)
-                    
-                    if response.status_code == 200:
-                        result = response.json()
+        for uploaded_file in uploaded_files:
+            if uploaded_file.name not in st.session_state.uploaded_documents:
+                with st.spinner(f"Processing {uploaded_file.name}..."):
+                    try:
+                        # Process the document
+                        result = asyncio.run(st.session_state.qa_system.upload_document(uploaded_file))
                         
-                        st.success(f"✅ {result['summary']['successful']} documents processed successfully!")
-                        
-                        for doc in result['documents']:
-                            if doc['status'] == 'processed':
-                                st.success(f"✅ {doc['filename']} - {doc['chunks']} chunks created")
-                            else:
-                                st.error(f"❌ {doc['filename']}: {doc.get('error', 'Unknown error')}")
-                        
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Error: {response.text}")
-                
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-    
-    st.divider()
-    
-    # Q&A Section
-    st.subheader("❓ Ask Questions")
-    
-    # Initialize session state for session management
-    if 'current_session_id' not in st.session_state:
-        st.session_state.current_session_id = None
-    if 'all_sessions' not in st.session_state:
-        st.session_state.all_sessions = []
-    
-    # Session management
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        if st.session_state.current_session_id:
-            st.info(f"🔗 Current Session: {st.session_state.current_session_id[:8]}...")
-        else:
-            st.info("🆕 No active session")
-    
-    with col2:
-        if st.button("🔄 New Session"):
-            # Save current session to history before creating new one
-            if st.session_state.current_session_id and st.session_state.current_session_id not in st.session_state.all_sessions:
-                st.session_state.all_sessions.append(st.session_state.current_session_id)
-            
-            # Clear current session
-            st.session_state.current_session_id = None
-            st.success("New session will be created with your next question!")
-    
-    # Question input
-    question = st.text_input("Enter your question:")
-    
-    if st.button("🎯 Ask Question", type="primary", disabled=not question):
-        with st.spinner("Generating answer..."):
-            try:
-                payload = {
-                    "question": question,
-                    "session_id": st.session_state.current_session_id
-                }
-                
-                response = requests.post(
-                    f"{API_BASE_URL}/ask-question", 
-                    json=payload,
-                    timeout=60
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
+                        if result.get('success'):
+                            st.session_state.uploaded_documents[uploaded_file.name] = {
+                                'doc_id': result['doc_id'],
+                                'upload_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                'chunks': result.get('chunks_created', 0),
+                                'size': uploaded_file.size
+                            }
+                            
+                            st.success(f"✅ Successfully processed {uploaded_file.name}")
+                            st.info(f"📊 Created {result.get('chunks_created', 0)} chunks")
+                        else:
+                            st.error(f"❌ Failed to process {uploaded_file.name}: {result.get('error', 'Unknown error')}")
                     
-                    # Update current session ID
-                    st.session_state.current_session_id = result['session_id']
-                    
-                    # Add to all sessions if not already there
-                    if result['session_id'] not in st.session_state.all_sessions:
-                        st.session_state.all_sessions.append(result['session_id'])
-                    
-                    # Display answer
-                    st.subheader("💡 Answer")
-                    st.write(result['answer'])
-                    
-                    # Display metrics
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Confidence", f"{result['confidence']:.2f}")
-                    with col2:
-                        st.metric("Response Time", f"{result['response_time']:.2f}s")
-                    with col3:
-                        st.metric("Sources", len(result.get('sources', [])))
-                    
-                    # Display sources
-                    if result.get('sources'):
-                        st.subheader("📚 Sources")
-                        for i, source in enumerate(result['sources'], 1):
-                            with st.expander(f"Source {i}: {source['source']}"):
-                                st.write(f"**Similarity:** {source['similarity']:.3f}")
-                                st.write(f"**Preview:** {source.get('preview', 'No preview')}")
-                
-                else:
-                    st.error(f"❌ Error: {response.text}")
-            
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
-
-def evaluation_tab():
-    """Evaluation interface"""
-    st.header("🎯 F1 Score Evaluation")
+                    except Exception as e:
+                        st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
     
-    # Get documents for evaluation
-    try:
-        response = requests.get(f"{API_BASE_URL}/list-documents", timeout=10)
-        if response.status_code == 200:
-            doc_list = response.json()
-            documents = doc_list.get('documents', [])
-            
-            if not documents:
-                st.warning("⚠️ No documents available. Please upload documents first.")
-                return
-            
-            # Document selector
-            doc_options = {f"{doc['filename']} ({doc['chunk_count']} chunks)": doc['doc_id'] 
-                          for doc in documents}
-            
-            selected_doc_name = st.selectbox(
-                "Select document for evaluation:",
-                list(doc_options.keys())
-            )
-            
-            if selected_doc_name:
-                selected_doc_id = doc_options[selected_doc_name]
-                
-                col1, col2 = st.columns(2)
+    # Display uploaded documents
+    if st.session_state.uploaded_documents:
+        st.markdown("### 📚 Uploaded Documents")
+        
+        for filename, doc_info in st.session_state.uploaded_documents.items():
+            with st.expander(f"📄 {filename}"):
+                col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    if st.button("📝 Generate Questions", type="secondary"):
-                        generate_questions(selected_doc_id)
+                    st.metric("📊 Chunks", doc_info['chunks'])
                 
                 with col2:
-                    if st.button("🎯 Run F1 Evaluation", type="primary"):
-                        run_evaluation(selected_doc_id)
-        
-        else:
-            st.error("Could not fetch documents")
-    
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
-
-def generate_questions(doc_id: str):
-    """Generate questions from document"""
-    with st.spinner("Generating questions from document..."):
-        try:
-            # Add timestamp to ensure different questions each time
-            timestamp = int(time.time() * 1000)
-            response = requests.get(f"{API_BASE_URL}/generate-questions/{doc_id}?max_questions=8&seed={timestamp}", timeout=120)
-            
-            if response.status_code == 200:
-                result = response.json()
+                    st.metric("📅 Uploaded", doc_info['upload_time'])
                 
-                st.success(f"✅ Generated {result['questions_generated']} questions!")
-                
-                st.subheader("📝 Generated Questions")
-                questions_data = result.get('questions_data', [])
-                
-                if questions_data:
-                    for i, q_data in enumerate(questions_data, 1):
-                        question = q_data.get('question', 'No question')
-                        question_type = q_data.get('question_type', 'general')
-                        st.write(f"{i}. **[{question_type.title()}]** {question}")
-                else:
-                    # Fallback to simple list
-                    for i, question in enumerate(result.get('questions', []), 1):
-                        st.write(f"{i}. {question}")
-                
-                # Store in session state for evaluation
-                st.session_state.generated_questions = questions_data
-                st.session_state.source_doc_id = doc_id
-            
-            else:
-                st.error(f"❌ Error: {response.text}")
-        
-        except Exception as e:
-            st.error(f"❌ Error: {str(e)}")
-
-def run_evaluation(doc_id: str):
-    """Run F1 evaluation"""
-    with st.spinner("Running F1 evaluation... This may take a few minutes."):
-        try:
-            response = requests.get(f"{API_BASE_URL}/evaluate/{doc_id}", timeout=300)
-            
-            if response.status_code == 200:
-                result = response.json()
-                evaluation_results = result['results']
-                
-                st.success("✅ F1 Evaluation completed!")
-                
-                # Display summary metrics
-                col1, col2, col3, col4, col5 = st.columns(5)
-
-                with col1:
-                    avg_f1 = evaluation_results.get('average_f1', 0)
-                    st.metric("F1 Score", f"{avg_f1:.3f}")
-
-                with col2:
-                    avg_semantic = evaluation_results.get('average_semantic', 0)
-                    st.metric("Semantic Score", f"{avg_semantic:.3f}")
-
                 with col3:
-                    accuracy_rate = evaluation_results.get('accuracy_rate', 0)
-                    st.metric("Accuracy Rate", f"{accuracy_rate:.3f}")
+                    size_mb = doc_info['size'] / (1024 * 1024)
+                    st.metric("💾 Size", f"{size_mb:.2f} MB")
 
-                with col4:
-                    total_q = evaluation_results.get('total_questions', 0)
-                    st.metric("Questions", total_q)
-
-                with col5:
-                    avg_time = evaluation_results.get('average_response_time', 0)
-                    st.metric("Avg Time", f"{avg_time:.2f}s")
-
-                # Show question types breakdown
-                question_types = evaluation_results.get('question_types', {})
-                if question_types:
-                    st.subheader("📊 Question Types Generated")
-                    type_cols = st.columns(len(question_types))
-                    for i, (q_type, count) in enumerate(question_types.items()):
-                        with type_cols[i % len(type_cols)]:
-                            st.metric(q_type.title(), count)
-
-                # Performance grade
-                st.subheader("🎯 Performance Assessment")
-                semantic_score = evaluation_results.get('average_semantic', 0)
-                if semantic_score >= 0.9:
-                    grade = "A+ (Excellent)"
-                    color = "green"
-                elif semantic_score >= 0.8:
-                    grade = "A (Very Good)"
-                    color = "lightgreen"
-                elif semantic_score >= 0.7:
-                    grade = "B (Good)"
-                    color = "yellow"
-                elif semantic_score >= 0.6:
-                    grade = "C (Acceptable)"
-                    color = "orange"
-                else:
-                    grade = "D (Needs Improvement)"
-                    color = "red"
-
-                st.markdown(f"**Overall Grade (Semantic):** :{color}[{grade}]")
-                
-                # Detailed results
-                st.subheader("📊 Detailed Results")
-                predictions = evaluation_results.get('predictions', [])
-                
-                if predictions:
-                    for i, pred in enumerate(predictions, 1):
-                        question_type = pred.get('question_type', 'general')
-                        with st.expander(f"Q{i} [{question_type.title()}]: {pred['question'][:60]}..."):
-                            st.write(f"**Question:** {pred['question']}")
-                            st.write(f"**Expected:** {pred['expected']}")
-                            st.write(f"**Predicted:** {pred['predicted']}")
-                            
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.write(f"**F1 Score:** {pred['f1_score']:.3f}")
-                            with col2:
-                                st.write(f"**Semantic:** {pred['semantic_score']:.3f}")
-                            with col3:
-                                contains = "✅ Yes" if pred['contains_answer'] else "❌ No"
-                                st.write(f"**Contains Answer:** {contains}")
-                            
-                            st.write(f"**Response Time:** {pred['response_time']:.2f}s")
-                            st.write(f"**Confidence:** {pred['confidence']:.3f}")
-                
-                # Score distributions
-                f1_scores = evaluation_results.get('f1_scores', [])
-                semantic_scores = evaluation_results.get('semantic_scores', [])
-                
-                if f1_scores and semantic_scores:
-                    st.subheader("📈 Score Distributions")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.write("**F1 Scores**")
-                        st.bar_chart({"F1 Scores": f1_scores})
-                        
-                        import statistics
-                        st.write(f"- Average: {statistics.mean(f1_scores):.3f}")
-                        st.write(f"- Min: {min(f1_scores):.3f}")
-                        st.write(f"- Max: {max(f1_scores):.3f}")
-                    
-                    with col2:
-                        st.write("**Semantic Scores**")
-                        st.bar_chart({"Semantic Scores": semantic_scores})
-                        
-                        st.write(f"- Average: {statistics.mean(semantic_scores):.3f}")
-                        st.write(f"- Min: {min(semantic_scores):.3f}")
-                        st.write(f"- Max: {max(semantic_scores):.3f}")
-            
-            else:
-                st.error(f"❌ Evaluation failed: {response.text}")
-        
-        except Exception as e:
-            st.error(f"❌ Error: {str(e)}")
-
-def conversation_history():
-    """Show conversation history with improved session management"""
-    st.header("💬 Conversation History")
+def render_ask_questions():
+    """Render question asking page"""
+    st.markdown('<h1 class="main-header">❓ Ask Questions</h1>', unsafe_allow_html=True)
     
-    # Initialize session state if not exists
-    if 'all_sessions' not in st.session_state:
-        st.session_state.all_sessions = []
-    if 'current_session_id' not in st.session_state:
-        st.session_state.current_session_id = None
-    
-    # Add current session to all sessions if it exists and not already there
-    if (st.session_state.current_session_id and 
-        st.session_state.current_session_id not in st.session_state.all_sessions):
-        st.session_state.all_sessions.append(st.session_state.current_session_id)
-    
-    # Show all available sessions
-    all_sessions = st.session_state.all_sessions.copy()
-    if st.session_state.current_session_id and st.session_state.current_session_id not in all_sessions:
-        all_sessions.append(st.session_state.current_session_id)
-    
-    if not all_sessions:
-        st.info("💬 No conversation sessions found. Start a conversation in the Upload & Q&A tab to see history.")
+    if not st.session_state.uploaded_documents:
+        st.warning("⚠️ Please upload documents first before asking questions.")
         return
     
-    # Session selector
-    st.subheader("📋 Select Session to View")
+    # Current session info
+    current_session = st.session_state.all_sessions[st.session_state.current_session_id]
+    st.info(f"💬 Current Session: **{current_session['name']}** (Created: {current_session['created_at']})")
     
-    # Create session options with labels
-    session_options = {}
-    for session_id in all_sessions:
-        if session_id == st.session_state.current_session_id:
-            label = f"🟢 Current Session: {session_id[:8]}..."
-        else:
-            label = f"📝 Session: {session_id[:8]}..."
-        session_options[label] = session_id
+    # Question input
+    question = st.text_input(
+        "Enter your question:",
+        placeholder="What would you like to know about the uploaded documents?",
+        help="Ask any question about the content in your uploaded documents"
+    )
     
-    # Default to current session if available
-    default_session = None
-    if st.session_state.current_session_id:
-        for label, session_id in session_options.items():
-            if session_id == st.session_state.current_session_id:
-                default_session = label
-                break
+    col1, col2 = st.columns([1, 4])
     
-    # Session selector
-    if session_options:
-        selected_session_label = st.selectbox(
-            "Choose a session:",
-            list(session_options.keys()),
-            index=list(session_options.keys()).index(default_session) if default_session else 0
+    with col1:
+        ask_button = st.button("🔍 Ask Question", type="primary", use_container_width=True)
+    
+    if ask_button and question:
+        with st.spinner("🤔 Thinking..."):
+            result = asyncio.run(process_question(question))
+            
+            # Display answer
+            st.markdown("### 💡 Answer")
+            
+            if 'error' not in result:
+                st.markdown(f"**Confidence:** {result.get('confidence', 0):.2f}")
+                st.markdown(result['answer'])
+                
+                # Display sources if available
+                if result.get('sources'):
+                    with st.expander("📚 Sources"):
+                        for i, source in enumerate(result['sources'], 1):
+                            st.markdown(f"**Source {i}:** {source.get('source', 'Unknown')}")
+                            st.markdown(f"*Similarity:* {source.get('similarity', 0):.3f}")
+                            st.markdown(f"*Preview:* {source.get('preview', 'No preview available')}")
+                            st.markdown("---")
+            else:
+                st.error(f"❌ {result['answer']}")
+    
+    # Display conversation history for current session
+    conversation = get_current_conversation()
+    if conversation:
+        st.markdown("### 💬 Conversation History (Current Session)")
+        
+        for i, item in enumerate(reversed(conversation[-10:])):  # Show last 10
+            with st.expander(f"Q{len(conversation)-i}: {item['question'][:50]}..."):
+                st.markdown(f"**Question:** {item['question']}")
+                st.markdown(f"**Answer:** {item['answer']}")
+                st.markdown(f"**Confidence:** {item['confidence']:.2f}")
+                st.markdown(f"**Time:** {item['timestamp']}")
+
+def render_evaluation():
+    """Render evaluation page with Gemini-powered question generation"""
+    st.markdown('<h1 class="main-header">📊 Evaluation</h1>', unsafe_allow_html=True)
+    
+    if not st.session_state.uploaded_documents:
+        st.warning("⚠️ Please upload documents first before running evaluation.")
+        return
+    
+    st.markdown("""
+    ### 🧠 AI-Powered Evaluation
+    
+    This evaluation uses **Gemini AI** to generate intelligent, context-aware questions from your documents.
+    The system will:
+    - 🤖 Generate diverse questions using Gemini's language understanding
+    - 📝 Create factual, analytical, and conceptual questions
+    - 🎯 Test the RAG system's ability to answer these AI-generated questions
+    - 📊 Provide detailed performance metrics
+    """)
+    
+    # Document selection
+    doc_options = list(st.session_state.uploaded_documents.keys())
+    selected_doc = st.selectbox("Select document for evaluation:", doc_options)
+    
+    if selected_doc:
+        doc_info = st.session_state.uploaded_documents[selected_doc]
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("📊 Chunks", doc_info['chunks'])
+        with col2:
+            st.metric("📅 Uploaded", doc_info['upload_time'])
+        with col3:
+            # Estimate questions based on chunks
+            estimated_questions = min(8, max(5, doc_info['chunks'] // 3))
+            st.metric("🤖 Est. Questions", estimated_questions)
+        
+        # Evaluation settings
+        st.markdown("### ⚙️ Evaluation Settings")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            max_questions = st.slider(
+                "Maximum questions to generate:",
+                min_value=5,
+                max_value=10,
+                value=min(8, max(5, doc_info['chunks'] // 3)),
+                help="Gemini will generate up to this many questions"
+            )
+        
+        with col2:
+            st.info("🤖 **Gemini AI Features:**\n- Context-aware questions\n- Multiple question types\n- Natural language generation\n- Intelligent fallbacks")
+        
+        # Run evaluation button
+        if st.button("🚀 Run AI Evaluation", type="primary", use_container_width=True):
+            with st.spinner("🤖 Gemini is generating intelligent questions..."):
+                try:
+                    # Run evaluation
+                    doc_id = doc_info['doc_id']
+                    
+                    # Generate questions using Gemini
+                    st.info("🧠 Step 1: Gemini AI is analyzing document content...")
+                    questions_data = asyncio.run(
+                        st.session_state.simple_evaluator.generate_questions_from_document(
+                            doc_id, max_questions
+                        )
+                    )
+                    
+                    if not questions_data:
+                        st.error("❌ Failed to generate questions from the document.")
+                        return
+                    
+                    st.success(f"✅ Generated {len(questions_data)} AI-powered questions!")
+                    
+                    # Show generated questions
+                    with st.expander("🤖 View Gemini-Generated Questions"):
+                        for i, q_data in enumerate(questions_data, 1):
+                            st.markdown(f"**Q{i} ({q_data.get('question_type', 'general')}):** {q_data['question']}")
+                    
+                    # Run evaluation
+                    st.info("📊 Step 2: Evaluating RAG system performance...")
+                    evaluation_results = asyncio.run(
+                        st.session_state.simple_evaluator.evaluate_with_f1(questions_data)
+                    )
+                    
+                    # Store results
+                    st.session_state.evaluation_results[selected_doc] = evaluation_results
+                    
+                    st.success("🎉 Evaluation completed!")
+                    
+                    # Display results
+                    render_evaluation_results(evaluation_results)
+                    
+                except Exception as e:
+                    st.error(f"❌ Evaluation failed: {str(e)}")
+                    logger.error(f"Evaluation error: {str(e)}")
+    
+    # Display previous evaluation results
+    if st.session_state.evaluation_results:
+        st.markdown("### 📈 Previous Evaluation Results")
+        
+        for doc_name, results in st.session_state.evaluation_results.items():
+            with st.expander(f"📊 Results for {doc_name}"):
+                render_evaluation_results(results)
+
+def render_evaluation_results(results: Dict[str, Any]):
+    """Render evaluation results with enhanced metrics"""
+    if 'error' in results:
+        st.error(f"❌ Evaluation error: {results['error']}")
+        return
+    
+    # Key metrics
+    st.markdown("### 📊 Performance Metrics")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "🎯 Average F1 Score",
+            f"{results['average_f1']:.3f}",
+            help="F1 score measures answer quality (0-1, higher is better)"
+        )
+    
+    with col2:
+        st.metric(
+            "🧠 Semantic Similarity",
+            f"{results['average_semantic']:.3f}",
+            help="Semantic similarity between expected and actual answers"
+        )
+    
+    with col3:
+        st.metric(
+            "✅ Accuracy Rate",
+            f"{results['accuracy_rate']:.1%}",
+            help="Percentage of questions answered correctly"
+        )
+    
+    with col4:
+        st.metric(
+            "⚡ Avg Response Time",
+            f"{results['average_response_time']:.2f}s",
+            help="Average time to generate answers"
+        )
+    
+    # Question types breakdown
+    if results.get('question_types'):
+        st.markdown("### 🤖 AI Question Types Generated")
+        
+        question_types_df = pd.DataFrame(
+            list(results['question_types'].items()),
+            columns=['Question Type', 'Count']
         )
         
-        selected_session_id = session_options[selected_session_label]
+        fig = px.pie(
+            question_types_df,
+            values='Count',
+            names='Question Type',
+            title="Distribution of AI-Generated Question Types"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Performance distribution
+    if results.get('f1_scores'):
+        st.markdown("### 📈 Performance Distribution")
         
-        # Fetch and display conversation history
-        try:
-            response = requests.get(f"{API_BASE_URL}/conversation-history/{selected_session_id}", timeout=10)
-            
-            if response.status_code == 200:
-                result = response.json()
-                history = result['history']
-                
-                # Session info
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Session ID", f"{result['session_id'][:8]}...")
-                with col2:
-                    st.metric("Total Interactions", result['total_interactions'])
-                with col3:
-                    status = "🟢 Active" if selected_session_id == st.session_state.current_session_id else "📝 Archived"
-                    st.metric("Status", status)
-                
-                if history:
-                    st.subheader("💬 Conversation")
-                    
-                    # Display conversations in chronological order (most recent first)
-                    for i, interaction in enumerate(reversed(history), 1):
-                        with st.expander(f"Q{i}: {interaction['question'][:60]}..."):
-                            st.write(f"**Question:** {interaction['question']}")
-                            st.write(f"**Answer:** {interaction['answer']}")
-                            
-                            # Metrics
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write(f"**Confidence:** {interaction['confidence']:.3f}")
-                            with col2:
-                                st.write(f"**Time:** {interaction['timestamp'][:19]}")
-                else:
-                    st.info("📝 No interactions found in this session.")
-            
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # F1 scores histogram
+            fig_f1 = px.histogram(
+                x=results['f1_scores'],
+                nbins=10,
+                title="F1 Score Distribution",
+                labels={'x': 'F1 Score', 'y': 'Count'}
+            )
+            st.plotly_chart(fig_f1, use_container_width=True)
+        
+        with col2:
+            # Response times
+            fig_time = px.histogram(
+                x=results['response_times'],
+                nbins=10,
+                title="Response Time Distribution",
+                labels={'x': 'Response Time (seconds)', 'y': 'Count'}
+            )
+            st.plotly_chart(fig_time, use_container_width=True)
+    
+    # Detailed predictions
+    if results.get('predictions'):
+        st.markdown("### 🔍 Detailed Question Analysis")
+        
+        predictions_df = pd.DataFrame(results['predictions'])
+        
+        # Add performance categories
+        def categorize_performance(f1_score):
+            if f1_score >= 0.8:
+                return "🟢 Excellent"
+            elif f1_score >= 0.6:
+                return "🟡 Good"
+            elif f1_score >= 0.4:
+                return "🟠 Fair"
             else:
-                st.error(f"❌ Error fetching session history: {response.text}")
+                return "🔴 Poor"
         
-        except Exception as e:
-            st.error(f"❌ Error: {str(e)}")
+        predictions_df['Performance'] = predictions_df['f1_score'].apply(categorize_performance)
+        
+        # Display table
+        st.dataframe(
+            predictions_df[['question', 'question_type', 'f1_score', 'semantic_score', 'contains_answer', 'Performance']],
+            use_container_width=True
+        )
+        
+        # Show individual predictions
+        with st.expander("📝 View Individual Q&A Pairs"):
+            for i, pred in enumerate(results['predictions'], 1):
+                st.markdown(f"**Question {i} ({pred.get('question_type', 'general')}):**")
+                st.markdown(f"*Q:* {pred['question']}")
+                st.markdown(f"*Expected:* {pred['expected'][:200]}...")
+                st.markdown(f"*Predicted:* {pred['predicted'][:200]}...")
+                st.markdown(f"*F1 Score:* {pred['f1_score']:.3f}")
+                st.markdown("---")
+
+def render_history():
+    """Render conversation history across all sessions"""
+    st.markdown('<h1 class="main-header">📈 Conversation History</h1>', unsafe_allow_html=True)
+    
+    if not st.session_state.all_sessions:
+        st.info("No conversation history available yet.")
+        return
+    
+    # Session overview
+    st.markdown("### 💬 Session Overview")
+    
+    session_data = []
+    for session_id, session_info in st.session_state.all_sessions.items():
+        is_current = session_id == st.session_state.current_session_id
+        session_data.append({
+            'Session': session_info['name'],
+            'Created': session_info['created_at'],
+            'Questions': len(session_info['conversation_history']),
+            'Status': '🟢 Current' if is_current else '⚪ Archived'
+        })
+    
+    if session_data:
+        sessions_df = pd.DataFrame(session_data)
+        st.dataframe(sessions_df, use_container_width=True)
+    
+    # Session selector for detailed view
+    st.markdown("### 🔍 Detailed Session History")
+    
+    session_options = {}
+    for session_id, session_data in st.session_state.all_sessions.items():
+        is_current = session_id == st.session_state.current_session_id
+        indicator = "🟢" if is_current else "⚪"
+        session_options[f"{indicator} {session_data['name']} ({len(session_data['conversation_history'])} questions)"] = session_id
+    
+    if session_options:
+        selected_session_name = st.selectbox(
+            "Select session to view:",
+            options=list(session_options.keys())
+        )
+        
+        selected_session_id = session_options[selected_session_name]
+        selected_session = st.session_state.all_sessions[selected_session_id]
+        
+        # Display session details
+        conversation = selected_session['conversation_history']
+        
+        if conversation:
+            st.markdown(f"**Session:** {selected_session['name']}")
+            st.markdown(f"**Created:** {selected_session['created_at']}")
+            st.markdown(f"**Total Questions:** {len(conversation)}")
+            
+            # Show conversation
+            for i, item in enumerate(conversation, 1):
+                with st.expander(f"Q{i}: {item['question'][:60]}... (Confidence: {item['confidence']:.2f})"):
+                    st.markdown(f"**🕒 Time:** {item['timestamp']}")
+                    st.markdown(f"**❓ Question:** {item['question']}")
+                    st.markdown(f"**💡 Answer:** {item['answer']}")
+                    st.markdown(f"**🎯 Confidence:** {item['confidence']:.2f}")
+        else:
+            st.info(f"No questions asked in {selected_session['name']} yet.")
+
+def main():
+    """Main application function"""
+    # Initialize session state
+    initialize_session_state()
+    
+    # Render sidebar and get selected page
+    page = render_sidebar()
+    
+    # Render selected page
+    if page == "📄 Document Upload":
+        render_document_upload()
+    elif page == "❓ Ask Questions":
+        render_ask_questions()
+    elif page == "📊 Evaluation":
+        render_evaluation()
+    elif page == "📈 History":
+        render_history()
 
 if __name__ == "__main__":
     main()
