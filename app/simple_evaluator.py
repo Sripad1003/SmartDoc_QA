@@ -11,6 +11,8 @@ import random
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+import google.generativeai as genai
+from .config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -21,51 +23,19 @@ class SimpleEvaluator:
         self.document_processor = document_processor
         self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
         
-        # Enhanced question templates with more variety
-        self.question_templates = {
-            'factual': [
-                "What specific information does the text provide about {}?",
-                "What details are mentioned regarding {}?",
-                "What facts are stated about {}?",
-                "What key information is given about {}?",
-                "What specific details does the document mention about {}?",
-                "What concrete information is provided about {}?",
-                "What particular facts are highlighted about {}?",
-                "What explicit details are shared about {}?"
-            ],
-            'analytical': [
-                "How does the text explain the concept of {}?",
-                "What approach does the document take regarding {}?",
-                "How is {} described or characterized in the text?",
-                "What perspective does the text offer on {}?",
-                "How does the document analyze {}?",
-                "What interpretation is given for {}?",
-                "How does the text break down the topic of {}?",
-                "What analytical framework is used for {}?"
-            ],
-            'descriptive': [
-                "What characteristics of {} are described?",
-                "What features of {} does the text highlight?",
-                "What attributes of {} are mentioned?",
-                "What properties of {} are discussed?",
-                "What aspects of {} are covered in the text?",
-                "What qualities of {} are emphasized?",
-                "What elements of {} are detailed?",
-                "What components of {} are described?"
-            ],
-            'comparative': [
-                "What differences regarding {} are mentioned?",
-                "What similarities about {} are discussed?",
-                "How does {} compare to other concepts in the text?",
-                "What contrasts are drawn about {}?",
-                "What comparisons are made regarding {}?",
-                "How is {} differentiated from other topics?",
-                "What parallels are drawn with {}?",
-                "What distinctions are made about {}?"
-            ]
-        }
+        # Configure Gemini for question generation
+        genai.configure(api_key=Config.GEMINI_API_KEY)
+        self.question_generator = genai.GenerativeModel(
+            Config.GENERATION_MODEL,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=1000,
+                temperature=0.7,  # Higher temperature for more creative questions
+                top_p=0.9,
+                top_k=40
+            )
+        )
         
-        # Fallback questions with more variety
+        # Fallback questions for when Gemini fails
         self.fallback_questions = [
             "What is the main topic discussed in this document?",
             "What are the key points mentioned in the text?",
@@ -74,20 +44,16 @@ class SimpleEvaluator:
             "What significant details are highlighted?",
             "What core concepts are explained?",
             "What essential information is shared?",
-            "What fundamental ideas are presented?",
-            "What crucial points are emphasized?",
-            "What vital information is contained in the text?",
-            "What central themes are explored?",
-            "What principal ideas are discussed?"
+            "What fundamental ideas are presented?"
         ]
         
         # Add randomization seed based on current time
         self.question_seed = int(time.time() * 1000) % 10000
     
-        logger.info("SimpleEvaluator initialized with enhanced question generation")
+        logger.info("SimpleEvaluator initialized with Gemini-powered question generation")
 
     async def generate_questions_from_document(self, doc_id: str, max_questions: int = None) -> List[Dict]:
-        """Generate diverse questions from uploaded document - different each time"""
+        """Generate diverse questions using Gemini AI - different each time"""
         questions_data = []
         
         # Update seed for different questions each time
@@ -102,7 +68,7 @@ class SimpleEvaluator:
             
             logger.info(f"Found {len(chunks)} chunks for document {doc_id} (seed: {self.question_seed})")
             
-            # Ensure minimum 5 questions, respect max_questions from API
+            # Determine target number of questions
             if max_questions is None:
                 if len(chunks) >= 25:
                     max_questions = 8
@@ -117,321 +83,223 @@ class SimpleEvaluator:
             if max_questions < 5:
                 max_questions = 5
             
-            logger.info(f"Target: {max_questions} questions (minimum 5) from {len(chunks)} chunks")
+            logger.info(f"Target: {max_questions} questions from {len(chunks)} chunks using Gemini AI")
             
-            # Use ALL chunks, even small ones
+            # Filter usable chunks
             usable_chunks = []
             for chunk in chunks:
                 text = chunk.get("text", "").strip()
-                if len(text) >= 20:  # Very low threshold
+                if len(text) >= 30:  # Minimum content for meaningful questions
                     usable_chunks.append(chunk)
             
             if not usable_chunks:
                 logger.error("No usable chunks found - all chunks too short")
-                return []
+                return await self._generate_fallback_questions(max_questions)
             
-            # Shuffle chunks for variety each time
+            # Shuffle chunks for variety
             random.shuffle(usable_chunks)
-            logger.info(f"Using {len(usable_chunks)} usable chunks (shuffled)")
+            logger.info(f"Using {len(usable_chunks)} usable chunks for Gemini generation")
             
-            # Try multiple strategies to ensure we get diverse questions
+            # Strategy 1: Generate questions using Gemini AI
             generated_questions = set()
             
-            # Strategy 1: Diverse template questions - randomized selection
-            template_count = min(max_questions // 2 + 1, len(usable_chunks))
-            selected_chunks = random.sample(usable_chunks, min(template_count, len(usable_chunks)))
+            # Select diverse chunks for question generation
+            selected_chunks = self._select_diverse_chunks(usable_chunks, max_questions)
             
             for i, chunk in enumerate(selected_chunks):
                 if len(questions_data) >= max_questions:
                     break
                 
                 try:
-                    question_data = self._generate_diverse_template_question(chunk, i)
-                    if question_data and question_data['question'].lower() not in generated_questions:
-                        questions_data.append(question_data)
-                        generated_questions.add(question_data['question'].lower())
-                        logger.info(f"Generated diverse Q{len(questions_data)}: {question_data['question'][:50]}...")
-                except Exception as e:
-                    logger.error(f"Error in diverse template question {i}: {str(e)}")
-                    continue
-            
-            # Strategy 2: Contextual questions - different approach each time
-            if len(questions_data) < max_questions:
-                remaining_needed = max_questions - len(questions_data)
-                logger.info(f"Need {remaining_needed} more questions, trying contextual approach...")
-                
-                # Use different chunks for contextual questions
-                remaining_chunks = [c for c in usable_chunks if c not in selected_chunks]
-                if remaining_chunks:
-                    contextual_chunks = random.sample(remaining_chunks, min(remaining_needed, len(remaining_chunks)))
+                    # Generate questions using Gemini
+                    chunk_questions = await self._generate_gemini_questions(chunk, i)
                     
-                    for i, chunk in enumerate(contextual_chunks):
+                    for question_data in chunk_questions:
                         if len(questions_data) >= max_questions:
                             break
                         
-                        try:
-                            question_data = self._generate_contextual_question(chunk, i)
-                            if question_data and question_data['question'].lower() not in generated_questions:
-                                questions_data.append(question_data)
-                                generated_questions.add(question_data['question'].lower())
-                                logger.info(f"Generated contextual Q{len(questions_data)}: {question_data['question'][:50]}...")
-                        except Exception as e:
-                            logger.error(f"Error in contextual question {i}: {str(e)}")
-                            continue
-            
-            # Strategy 3: Analytical questions - for variety
-            if len(questions_data) < max_questions:
-                remaining_needed = max_questions - len(questions_data)
-                logger.info(f"Need {remaining_needed} more questions, trying analytical approach...")
-                
-                for i in range(remaining_needed):
-                    if len(questions_data) >= max_questions:
-                        break
-                    
-                    try:
-                        # Use random chunk for analytical questions
-                        chunk = random.choice(usable_chunks)
-                        question_data = self._generate_analytical_question(chunk, i)
-                        if question_data and question_data['question'].lower() not in generated_questions:
+                        question_lower = question_data['question'].lower()
+                        if question_lower not in generated_questions:
                             questions_data.append(question_data)
-                            generated_questions.add(question_data['question'].lower())
-                            logger.info(f"Generated analytical Q{len(questions_data)}: {question_data['question'][:50]}...")
-                    except Exception as e:
-                        logger.error(f"Error in analytical question {i}: {str(e)}")
+                            generated_questions.add(question_lower)
+                            logger.info(f"Generated Gemini Q{len(questions_data)}: {question_data['question'][:60]}...")
+                
+                except Exception as e:
+                    logger.error(f"Error generating Gemini questions for chunk {i}: {str(e)}")
+                    # Try fallback for this chunk
+                    try:
+                        fallback_q = await self._generate_fallback_for_chunk(chunk, i)
+                        if fallback_q and fallback_q['question'].lower() not in generated_questions:
+                            questions_data.append(fallback_q)
+                            generated_questions.add(fallback_q['question'].lower())
+                            logger.info(f"Generated fallback Q{len(questions_data)}: {fallback_q['question'][:60]}...")
+                    except Exception as fe:
+                        logger.error(f"Fallback also failed for chunk {i}: {str(fe)}")
                         continue
             
-            # Strategy 4: Guaranteed fallback with variety - ensure minimum 5 questions
+            # Strategy 2: Ensure minimum questions with intelligent fallbacks
             if len(questions_data) < 5:
-                logger.info(f"Only have {len(questions_data)} questions, using varied fallback to reach minimum 5...")
+                logger.info(f"Only have {len(questions_data)} questions, generating more with fallbacks...")
                 
-                # More diverse fallback questions
-                varied_questions = [
-                    "What is the main topic discussed in this document?",
-                    "What key information is provided?",
-                    "What important details are mentioned?",
-                    "What concepts are explained?",
-                    "What facts or data are presented?",
-                    "What processes or methods are described?",
-                    "What conclusions can be drawn?",
-                    "What examples are given?",
-                    "What problems or solutions are discussed?",
-                    "What recommendations are made?",
-                    "What benefits or advantages are mentioned?",
-                    "What challenges or issues are addressed?"
-                ]
-                
-                # Shuffle for variety
-                random.shuffle(varied_questions)
-                
-                needed = max(5 - len(questions_data), 0)
-                for i, varied_q in enumerate(varied_questions[:needed]):
-                    if varied_q.lower() not in generated_questions:
-                        # Use different chunks for variety
-                        chunk_index = i % len(usable_chunks)
-                        chunk = usable_chunks[chunk_index]
-                        context_text = chunk.get("text", "")[:300]
-                        
-                        questions_data.append({
-                            "question": varied_q,
-                            "expected_answer": f"Based on the document content: {varied_q.lower().replace('?', '').replace('what ', '')}",
-                            "context": context_text + "...",
-                            "question_type": "varied_fallback",
-                            "chunk_index": chunk_index
-                        })
-                        generated_questions.add(varied_q.lower())
-                        logger.info(f"Generated varied fallback Q{len(questions_data)}: {varied_q}")
+                remaining_needed = max(5 - len(questions_data), 0)
+                fallback_questions = await self._generate_intelligent_fallbacks(
+                    usable_chunks, remaining_needed, generated_questions
+                )
+                questions_data.extend(fallback_questions)
             
-            logger.info(f"Successfully generated {len(questions_data)} diverse questions from document {doc_id}")
-            
-            # Final check - ensure we have at least 5 questions
-            if len(questions_data) < 5:
-                logger.warning(f"Only generated {len(questions_data)} questions, expected minimum 5")
+            logger.info(f"Successfully generated {len(questions_data)} questions using Gemini AI")
             
             return questions_data
             
         except Exception as e:
-            logger.error(f"Error in question generation: {str(e)}")
+            logger.error(f"Error in Gemini question generation: {str(e)}")
+            # Complete fallback to template-based questions
+            return await self._generate_fallback_questions(max_questions or 5)
+    
+    def _select_diverse_chunks(self, chunks: List[Dict], target_count: int) -> List[Dict]:
+        """Select diverse chunks for question generation"""
+        if len(chunks) <= target_count:
+            return chunks
+        
+        # Sort chunks by length and select diverse ones
+        chunks_with_length = [(chunk, len(chunk.get("text", ""))) for chunk in chunks]
+        chunks_with_length.sort(key=lambda x: x[1], reverse=True)
+        
+        selected = []
+        step = max(1, len(chunks_with_length) // target_count)
+        
+        for i in range(0, len(chunks_with_length), step):
+            if len(selected) >= target_count:
+                break
+            selected.append(chunks_with_length[i][0])
+        
+        # Fill remaining slots randomly
+        remaining_chunks = [c for c, _ in chunks_with_length if c not in selected]
+        while len(selected) < target_count and remaining_chunks:
+            selected.append(remaining_chunks.pop(random.randint(0, len(remaining_chunks) - 1)))
+        
+        return selected[:target_count]
+    
+    async def _generate_gemini_questions(self, chunk: Dict, chunk_index: int) -> List[Dict]:
+        """Generate questions for a chunk using Gemini AI"""
+        context_text = chunk.get("text", "").strip()
+        
+        if len(context_text) < 30:
+            return []
+        
+        # Create a comprehensive prompt for question generation
+        prompt = f"""You are an expert question generator. Based on the following text content, generate 2-3 diverse, thoughtful questions that would test someone's understanding of the material.
+
+TEXT CONTENT:
+{context_text}
+
+REQUIREMENTS:
+1. Generate 2-3 questions of different types (factual, analytical, conceptual)
+2. Questions should be clear, specific, and answerable from the text
+3. Vary the question styles (What, How, Why, etc.)
+4. Make questions that require understanding, not just memorization
+5. Each question should be on a separate line
+6. Do not include question numbers or bullets
+7. Each question must end with a question mark
+
+EXAMPLE FORMAT:
+What specific approach does the text describe for handling this situation?
+How does the author explain the relationship between these concepts?
+Why is this particular method considered effective according to the text?
+
+GENERATE QUESTIONS:"""
+
+        try:
+            # Generate questions using Gemini
+            response = await self._generate_with_gemini(prompt)
+            
+            if not response:
+                return []
+            
+            # Parse the response to extract questions
+            questions = self._parse_gemini_questions(response, context_text, chunk_index)
+            
+            logger.info(f"Gemini generated {len(questions)} questions for chunk {chunk_index}")
+            return questions
+            
+        except Exception as e:
+            logger.error(f"Error in Gemini question generation: {str(e)}")
             return []
     
-    def _generate_diverse_template_question(self, chunk: Dict, index: int) -> Dict:
-        """Generate question using diverse templates with randomization - synchronous version"""
-        context_text = chunk.get("text", "").strip()
+    async def _generate_with_gemini(self, prompt: str) -> str:
+        """Generate response using Gemini API with retry logic"""
+        max_retries = 3
         
-        # Expanded diverse templates
-        template_categories = {
-            "factual": [
-                "What specific information is provided about",
-                "What details are mentioned regarding",
-                "What facts are stated about",
-                "What data is given concerning"
-            ],
-            "analytical": [
-                "How does the text explain",
-                "What approach is described for",
-                "What method is outlined for",
-                "How is the concept of"
-            ],
-            "descriptive": [
-                "What characteristics are described for",
-                "What features are highlighted about",
-                "What aspects are covered regarding",
-                "What properties are mentioned for"
-            ],
-            "comparative": [
-                "What differences are noted about",
-                "What similarities are discussed regarding",
-                "How does the text compare",
-                "What contrasts are made concerning"
-            ]
-        }
-        
-        # Randomly select category and template
-        category = random.choice(list(template_categories.keys()))
-        template = random.choice(template_categories[category])
-        
-        try:
-            # Extract key terms from context
-            key_terms = self._extract_key_terms(context_text)
-            if key_terms:
-                key_term = random.choice(key_terms)
-                question = f"{template} {key_term}?"
-            else:
-                # Fallback with category-specific question
-                fallback_questions = {
-                    "factual": f"{template} the main subject?",
-                    "analytical": f"{template} discussed in the text?",
-                    "descriptive": f"{template} the topic?",
-                    "comparative": f"{template} mentioned in the content?"
-                }
-                question = fallback_questions.get(category, f"{template} the main topic?")
-            
-            question = self._clean_question(question)
-            
-            if not question or len(question) < 10:
-                question = f"What information is provided about the main topic?"
-            
-            # Generate simple answer from context
-            expected_answer = context_text[:200] + "..." if len(context_text) > 200 else context_text
-            
-            return {
-                "question": question,
-                "expected_answer": expected_answer,
-                "context": context_text[:200] + "...",
-                "question_type": f"diverse_{category}",
-                "chunk_index": index
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in diverse template question generation: {str(e)}")
-            return None
+        for attempt in range(max_retries):
+            try:
+                response = self.question_generator.generate_content(prompt)
+                
+                if response.text:
+                    return response.text.strip()
+                else:
+                    raise Exception("Empty response from Gemini")
+                    
+            except Exception as e:
+                logger.warning(f"Gemini API attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    raise
     
-    def _generate_contextual_question(self, chunk: Dict, index: int) -> Dict:
-        """Generate contextual questions based on content analysis - synchronous version"""
-        context_text = chunk.get("text", "").strip()
+    def _parse_gemini_questions(self, response: str, context_text: str, chunk_index: int) -> List[Dict]:
+        """Parse Gemini response to extract clean questions"""
+        questions_data = []
         
-        try:
-            # Simple contextual question generation based on keywords
-            contextual_fallbacks = [
-                "What is the significance of the information presented?",
-                "What can be understood from this content?",
-                "What important point is being made?",
-                "What is the purpose of this information?",
-                "What insight does this text provide?",
-                "What key message is conveyed?",
-                "What understanding can be gained?",
-                "What meaning is expressed?"
-            ]
+        # Split response into lines and clean
+        lines = response.split('\n')
+        
+        for line in lines:
+            line = line.strip()
             
-            question = random.choice(contextual_fallbacks)
+            # Skip empty lines and non-questions
+            if not line or not line.endswith('?'):
+                continue
             
-            # Generate comprehensive answer
-            expected_answer = context_text[:150] + "..." if len(context_text) > 150 else context_text
+            # Clean the question
+            question = self._clean_gemini_question(line)
             
-            return {
-                "question": question,
-                "expected_answer": expected_answer,
-                "context": context_text[:200] + "...",
-                "question_type": "contextual",
-                "chunk_index": index
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in contextual question generation: {str(e)}")
-            return None
+            if question and len(question) >= 10:
+                # Determine question type based on starting word
+                question_type = self._classify_question_type(question)
+                
+                # Generate expected answer from context
+                expected_answer = self._generate_expected_answer(question, context_text)
+                
+                questions_data.append({
+                    "question": question,
+                    "expected_answer": expected_answer,
+                    "context": context_text[:200] + "..." if len(context_text) > 200 else context_text,
+                    "question_type": f"gemini_{question_type}",
+                    "chunk_index": chunk_index
+                })
+        
+        return questions_data
     
-    def _generate_analytical_question(self, chunk: Dict, index: int) -> Dict:
-        """Generate analytical questions for deeper understanding - synchronous version"""
-        context_text = chunk.get("text", "").strip()
-        
-        try:
-            # Analytical question types
-            analytical_types = [
-                "Why is this information important?",
-                "What does this suggest about the topic?",
-                "How does this relate to the main theme?",
-                "What implications can be drawn?",
-                "What is the underlying meaning?",
-                "What purpose does this serve?",
-                "What can be inferred from this?",
-                "What is the significance of this content?"
-            ]
-            
-            question = random.choice(analytical_types)
-            
-            # Generate analytical answer
-            expected_answer = f"This content provides important insights that contribute to understanding the overall topic and its implications. {context_text[:100]}..."
-            
-            return {
-                "question": question,
-                "expected_answer": expected_answer,
-                "context": context_text[:200] + "...",
-                "question_type": "analytical",
-                "chunk_index": index
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in analytical question generation: {str(e)}")
-            return None
-    
-    def _extract_key_terms(self, text: str) -> List[str]:
-        """Extract key terms from text for question generation"""
-        # Simple keyword extraction
-        words = text.split()
-        
-        # Filter for meaningful terms (longer than 3 characters, not common words)
-        common_words = {'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'this', 'that', 'these', 'those', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'must'}
-        
-        key_terms = []
-        for word in words:
-            clean_word = word.strip('.,!?;:"()[]{}').lower()
-            if len(clean_word) > 3 and clean_word not in common_words and clean_word.isalpha():
-                key_terms.append(clean_word)
-        
-        # Return unique terms, limited to reasonable number
-        unique_terms = list(set(key_terms))
-        return unique_terms[:10]  # Limit to 10 key terms
-    
-    def _clean_question(self, question: str) -> str:
-        """Clean and format the question - more robust"""
+    def _clean_gemini_question(self, question: str) -> str:
+        """Clean and format Gemini-generated questions"""
         if not question:
             return ""
         
-        question = question.strip()
-        
-        # Remove common prefixes - more comprehensive
+        # Remove common prefixes that Gemini might add
         prefixes_to_remove = [
             "question:", "q:", "here's a question:", "based on the text:",
             "from the text:", "a question could be:", "one question is:",
             "the question is:", "question -", "q -", "here is a question:",
             "a good question would be:", "the question could be:",
-            "question about the text:", "text question:", "complete question:",
-            "completed question:", "answer:", "generate a question:",
-            "create a question:", "thoughtful question:"
+            "1.", "2.", "3.", "4.", "5.", "•", "-", "*",
+            "question about the text:", "text question:"
         ]
         
+        question = question.strip()
         question_lower = question.lower()
+        
         for prefix in prefixes_to_remove:
-            if question_lower.startswith(prefix):
+            if question_lower.startswith(prefix.lower()):
                 question = question[len(prefix):].strip()
                 break
         
@@ -446,11 +314,139 @@ class SimpleEvaluator:
         if question:
             question = question[0].upper() + question[1:]
         
-        # Basic validation - be more lenient
-        if len(question) < 5 or len(question) > 300:
+        # Validate length
+        if len(question) < 10 or len(question) > 300:
             return ""
         
         return question
+    
+    def _classify_question_type(self, question: str) -> str:
+        """Classify question type based on starting words"""
+        question_lower = question.lower()
+        
+        if question_lower.startswith(('what', 'which', 'who', 'when', 'where')):
+            return 'factual'
+        elif question_lower.startswith(('how', 'in what way')):
+            return 'analytical'
+        elif question_lower.startswith(('why', 'what is the reason')):
+            return 'causal'
+        elif question_lower.startswith(('describe', 'explain', 'what are the characteristics')):
+            return 'descriptive'
+        elif question_lower.startswith(('compare', 'contrast', 'what is the difference')):
+            return 'comparative'
+        else:
+            return 'general'
+    
+    def _generate_expected_answer(self, question: str, context_text: str) -> str:
+        """Generate expected answer based on question and context"""
+        # For now, use a portion of the context as expected answer
+        # In the future, this could also use Gemini to generate more precise answers
+        
+        if len(context_text) <= 200:
+            return context_text
+        else:
+            # Try to find the most relevant part of the context
+            question_words = set(question.lower().split())
+            sentences = re.split(r'[.!?]+', context_text)
+            
+            best_sentence = ""
+            best_score = 0
+            
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if len(sentence) < 20:
+                    continue
+                
+                sentence_words = set(sentence.lower().split())
+                overlap = len(question_words.intersection(sentence_words))
+                
+                if overlap > best_score:
+                    best_score = overlap
+                    best_sentence = sentence
+            
+            if best_sentence:
+                return best_sentence + "..."
+            else:
+                return context_text[:200] + "..."
+    
+    async def _generate_fallback_for_chunk(self, chunk: Dict, chunk_index: int) -> Dict:
+        """Generate a simple fallback question for a chunk"""
+        context_text = chunk.get("text", "").strip()
+        
+        fallback_templates = [
+            "What information is provided in this section?",
+            "What key points are mentioned here?",
+            "What details are discussed in this part?",
+            "What is the main focus of this content?",
+            "What important aspects are covered?"
+        ]
+        
+        question = random.choice(fallback_templates)
+        expected_answer = context_text[:150] + "..." if len(context_text) > 150 else context_text
+        
+        return {
+            "question": question,
+            "expected_answer": expected_answer,
+            "context": context_text[:200] + "..." if len(context_text) > 200 else context_text,
+            "question_type": "fallback",
+            "chunk_index": chunk_index
+        }
+    
+    async def _generate_intelligent_fallbacks(self, chunks: List[Dict], needed: int, existing_questions: set) -> List[Dict]:
+        """Generate intelligent fallback questions"""
+        fallback_questions = []
+        
+        # More sophisticated fallback questions
+        intelligent_fallbacks = [
+            "What is the main topic discussed in this document?",
+            "What key information is provided?",
+            "What important details are mentioned?",
+            "What concepts are explained?",
+            "What facts or data are presented?",
+            "What processes or methods are described?",
+            "What conclusions can be drawn?",
+            "What examples are given?",
+            "What problems or solutions are discussed?",
+            "What recommendations are made?"
+        ]
+        
+        random.shuffle(intelligent_fallbacks)
+        
+        for i, fallback_q in enumerate(intelligent_fallbacks[:needed]):
+            if fallback_q.lower() not in existing_questions:
+                # Use different chunks for variety
+                chunk_index = i % len(chunks)
+                chunk = chunks[chunk_index]
+                context_text = chunk.get("text", "")[:300]
+                
+                fallback_questions.append({
+                    "question": fallback_q,
+                    "expected_answer": f"Based on the document content: {context_text}...",
+                    "context": context_text + "...",
+                    "question_type": "intelligent_fallback",
+                    "chunk_index": chunk_index
+                })
+        
+        return fallback_questions
+    
+    async def _generate_fallback_questions(self, max_questions: int) -> List[Dict]:
+        """Generate complete fallback questions when everything else fails"""
+        selected_questions = random.sample(
+            self.fallback_questions, 
+            min(max_questions, len(self.fallback_questions))
+        )
+        
+        questions_data = []
+        for i, question in enumerate(selected_questions):
+            questions_data.append({
+                'question': question,
+                'expected_answer': 'Based on document content',
+                'context': 'General document content',
+                'question_type': 'complete_fallback',
+                'chunk_index': i
+            })
+        
+        return questions_data
     
     def _calculate_improved_f1_score(self, predicted: str, expected: str) -> float:
         """Improved F1 score calculation"""
