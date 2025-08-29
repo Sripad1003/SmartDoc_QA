@@ -7,22 +7,22 @@ A **production-ready, advanced document question-answering system** featuring su
 ## 🚀 Quick Start
 
 1. **Clone and Install Dependencies**
-    ```bash
+    \`\`\`bash
     git clone https://github.com/Sripad1003/SmartDoc_QA.git
     cd qa-system
     pip install -r requirements.txt
-    ```
+    \`\`\`
 
 2. **Configure Environment**
-    ```bash
+    \`\`\`bash
     cp .env.example .env
     # Edit .env to add your Gemini API key and adjust settings as needed
-    ```
+    \`\`\`
 
 3. **Run the System**
-    ```bash
+    \`\`\`bash
     python start.py
-    ```
+    \`\`\`
 
 4. **Access the Interfaces**
     - **Frontend (Streamlit):** [http://127.0.0.1:8501](http://127.0.0.1:8501)
@@ -32,7 +32,7 @@ A **production-ready, advanced document question-answering system** featuring su
 
 ## 🗂️ Project Structure
 
-```
+\`\`\`
 qa-system/
 ├── app/
 │   ├── __init__.py
@@ -47,7 +47,7 @@ qa-system/
 ├── requirements.txt         # Dependencies
 ├── .env.example             # Environment variables template
 └── README.md                # This file
-```
+\`\`\`
 
 ---
 
@@ -80,30 +80,30 @@ qa-system/
 
 ## 🏗️ System Architecture
 
-```
+\`\`\`
 flowchart LR
     A[Frontend (Streamlit)] <--> B[Backend (FastAPI)]
     B --> C[Google Gemini API]
     B --> D[Document Processor]
     D --> E[RAG System (Enhanced)]
     E --> F[Evaluation System (SQUAD)]
-```
+\`\`\`
 
 ---
 
 ## ⚙️ Configuration
 
 ### Required Environment Variables (`.env`)
-```
+\`\`\`
 GEMINI_API_KEY=your-api-key-here
-```
+\`\`\`
 
 ### Optional Enhanced Defaults
-```
+\`\`\`
 MAX_CHUNK_SIZE=1500          # Larger context per chunk
 MAX_RETRIEVAL_CHUNKS=8       # Fetch more sources for answers
 MAX_ANSWER_LENGTH=2000       # Longer, in-depth responses
-```
+\`\`\`
 
 - **Model:** Uses Gemini-1.5-Flash for fast, high-quality answers
 

@@ -1,0 +1,12 @@
+import { NextResponse } from "next/server"
+import { getApiBase } from "@/lib/server-config"
+
+export async function GET() {
+  const API = getApiBase()
+  const r = await fetch(`${API}/health`, { method: "GET" })
+  const text = await r.text()
+  return new NextResponse(text, {
+    status: r.status,
+    headers: { "content-type": r.headers.get("content-type") ?? "application/json" },
+  })
+}
