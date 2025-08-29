@@ -6,7 +6,7 @@ A production-ready document question-answering system with improved answer quali
 
 \`\`\`
 qa-system/
-├── app/ # Main application package
+├── app/ # Main application package 
 │ ├── init.py # Package initialization
 │ ├── main.py # FastAPI backend
 │ ├── config.py # Configuration settings
