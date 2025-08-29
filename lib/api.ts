@@ -7,20 +7,20 @@ import type {
   GenerateQuestionsResponse,
   HealthResponse,
   UploadResponse,
+  ConversationHistoryResponse,
 } from "@/types"
 
-// Frontend talks to Next.js proxy routes to avoid CORS.
 const NEXT_API = "/api"
 
 export async function getHealth(): Promise<HealthResponse> {
   const r = await fetch(`${NEXT_API}/health`, { method: "GET" })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await safeText(r))
   return r.json()
 }
 
 export async function getDocuments(): Promise<DocumentListResponse> {
   const r = await fetch(`${NEXT_API}/list-documents`, { method: "GET" })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await safeText(r))
   return r.json()
 }
 
@@ -31,7 +31,7 @@ export async function uploadDocuments(files: FileList): Promise<UploadResponse> 
     method: "POST",
     body: formData,
   })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await safeText(r))
   return r.json()
 }
 
@@ -41,7 +41,7 @@ export async function askQuestion(question: string, sessionId?: string): Promise
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ question, session_id: sessionId || null }),
   })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await safeText(r))
   return r.json()
 }
 
@@ -54,29 +54,26 @@ export async function generateQuestions(
   url.searchParams.set("max_questions", String(maxQuestions))
   if (seed) url.searchParams.set("seed", String(seed))
   const r = await fetch(url.toString().replace(url.origin, ""), { method: "GET" })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await safeText(r))
   return r.json()
 }
 
 export async function evaluateDocument(docId: string): Promise<EvaluateResponse> {
   const r = await fetch(`${NEXT_API}/evaluate/${docId}`, { method: "GET" })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await safeText(r))
   return r.json()
 }
 
 export async function getConversationHistory(sessionId: string): Promise<ConversationHistoryResponse> {
   const r = await fetch(`${NEXT_API}/conversation-history/${sessionId}`, { method: "GET" })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await safeText(r))
   return r.json()
 }
 
-export type ConversationHistoryResponse = {
-  session_id: string
-  history: {
-    question: string
-    answer: string
-    confidence: number
-    timestamp: string
-  }[]
-  total_interactions: number
+async function safeText(r: Response) {
+  try {
+    return await r.text()
+  } catch {
+    return "Request failed"
+  }
 }

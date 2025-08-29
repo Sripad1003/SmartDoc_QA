@@ -148,7 +148,7 @@ export default function UploadAndQA() {
                   </CardHeader>
                   <CardContent className="flex items-center justify-between">
                     <div className="flex items-center gap-3 text-sm text-white/80">
-                      <Badge className="bg-indigo-600 hover:bg-indigo-700">Chunks: {doc.chunk_count}</Badge>
+                      <Badge className="bg-emerald-600 hover:bg-emerald-700">Chunks: {doc.chunk_count}</Badge>
                       <Badge variant="secondary" className="text-black">
                         Length: {doc.text_length}
                       </Badge>
