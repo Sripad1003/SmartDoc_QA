@@ -118,7 +118,7 @@ GEMINI_API_KEY=your-api-key-here
 ### Optional Enhanced Defaults
 ```
 MAX_CHUNK_SIZE=1500          # Larger context per chunk
-MAX_RETRIEVAL_CHUNKS=8       # Fetch more sources for answers
+MAX_RETRIEVAL_CHUNKS=8       # Fetch more sources for answers 
 MAX_ANSWER_LENGTH=2000       # Longer, in-depth responses
 ```
 
