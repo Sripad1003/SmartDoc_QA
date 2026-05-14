@@ -37,8 +37,13 @@ qa-system/
     ```
 
 3. **Run the System**
+    Backend
     ```bash
-    python start.py
+     uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+    ```
+    Frontend
+    ```bash
+    streamlit run app/streamlit_app.py --server.port 8501 --server.address 127.0.0.1    
     ```
 
 4. **Access the Interfaces**

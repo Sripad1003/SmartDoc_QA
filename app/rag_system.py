@@ -19,7 +19,7 @@ class RAGSystem:
             Config.GENERATION_MODEL,
             generation_config=genai.types.GenerationConfig(
                 max_output_tokens=Config.MAX_ANSWER_LENGTH,
-                temperature=0.1,  # Lower temperature for more focused answers
+                temperature=0.7,  # Lower temperature for more focused answers
                 top_p=0.8,
                 top_k=40
             )
@@ -335,6 +335,7 @@ class RAGSystem:
         """Create enhanced prompt for better answer generation"""
         prompt = f"""You are an expert document analysis assistant. Your task is to provide comprehensive, accurate answers based on the provided document context.
 
+        Don't include the question, chunk details and also the file details in the final answer.
         CONVERSATION HISTORY:
         {conversation_context}
 
@@ -351,7 +352,7 @@ class RAGSystem:
         5. If information is incomplete, clearly state what is missing
         6. If the answer requires information not in the context, clearly state this limitation
         7. Use bullet points or numbered lists when appropriate for clarity
-        8. Aim for a thorough response (200-800 words depending on complexity)
+        8. Aim for a thorough response that addresses potential follow-up questions
         9. Cite specific sections when referencing document content
 
         ANSWER:"""
